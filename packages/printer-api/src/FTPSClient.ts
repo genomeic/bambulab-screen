@@ -318,7 +318,10 @@ export class FTPSClient {
   private buildDataChannelUrl(port: number): string {
     const parsed = new URL(this.controlUrl)
     const target = parsed.searchParams.get('url')
-    const host = target ? new URL(target).hostname : parsed.hostname
+    // `new URL('tls://host:port').hostname` returns '' on older Android WebViews
+    // because `tls:` / `mqtts:` are not "special schemes" — parse the host out of
+    // the raw target instead so the data channel stays on the printer IP.
+    const host = target ? target.replace(/^[a-z]+:\/\//i, '').split(/[:/?#]/, 1)[0] : parsed.hostname
     const next = new URL(parsed.toString())
     next.searchParams.set('url', `tls://${host}:${port}`)
     return next.toString()
