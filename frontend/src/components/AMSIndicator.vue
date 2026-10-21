@@ -27,14 +27,21 @@ const props = withDefaults(
 
 const isVisible = computed(() => props.type === 'normal' || [1, 4].includes(props.ams.tray.length))
 
-const trayAt = (slot: number) => props.ams.tray[slot - 1]
+const trayAt = (slot: number) => props.ams.tray[slot - 1] as any
 const slotColor = (slot: number) => {
-  const color = trayAt(slot).tray_color
+  // H2 series / AMS 2 Pro firmware may report the color under a different key
+  const tray = trayAt(slot) ?? {}
+  const color = tray.tray_color || tray.tray_colours || tray.cols || tray.color || ''
   return color && color.length > 0 ? `#${color}` : undefined
 }
 const slotRemain = (slot: number) => {
-  const remain = trayAt(slot).remain
-  return remain !== -1 ? `${remain}%` : undefined
+  const tray = trayAt(slot) ?? {}
+  const remain = tray.remain !== undefined ? Number(tray.remain) : -1
+  if (remain > 0) return `${remain}%`
+  // H2D/AMS 2 Pro reports remain=0 even with filament loaded; show full color
+  // (P1 empty slots have remain=-1 AND no tray_color, so they stay uncolored)
+  const hasColor = !!(tray.tray_color || tray.tray_colours || tray.cols || tray.color)
+  return hasColor ? '100%' : '0%'
 }
 </script>
 

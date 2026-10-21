@@ -216,9 +216,10 @@ import {
   type CloudPreference,
   type LoginSuccessResult,
 } from '@bambulab-p1screen/printer-api'
-import { CLOUD_BASE_URLS, CLOUD_MQTT_BROKERS, connectPrinter, createApiUrl, createMqttUrl } from '../../printer'
+import { CLOUD_BASE_URLS, CLOUD_MQTT_BROKERS, createApiUrl, createMqttUrl } from '../../printer'
 import { ROUTE_NAME } from '../../router/routes'
-import { addDevice, getDevices, removeDevice, setCurrentDevice } from '../../utils/device'
+import { addDevice, getDevices, removeDevice } from '../../utils/device'
+import { switchToDevice } from '../../stores/fleet'
 import { markDeviceListPopupRestore } from '../../utils/navigation'
 import {
   getCloudUser,
@@ -333,8 +334,7 @@ const handleSave = () => {
     code: code.value,
   }
   addDevice(device)
-  setCurrentDevice(serial.value)
-  connectPrinter(device)
+  switchToDevice(serial.value)
   router.back()
   showToast({
     message: t('save_success'),
@@ -564,8 +564,7 @@ const handleAddCloudDevice = async (device: {
       code: device.code,
     }
     addDevice(deviceItem)
-    setCurrentDevice(device.serial)
-    connectPrinter(deviceItem)
+    switchToDevice(device.serial)
     localDevices.value = getDevices()
     showToast({
       message: t('device_add_success'),

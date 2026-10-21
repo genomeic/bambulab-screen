@@ -62,7 +62,14 @@
           </template>
         </van-popover>
       </div>
-    </div>
+
+    <ManualSpoolDialog
+      v-model:show="showSpoolDialog"
+      :serial="spoolSerial"
+      :slot-index="spoolSlotIndex"
+      :slot-name="spoolSlotName"
+    />
+  </div>
   </BasePage>
 </template>
 
@@ -76,7 +83,9 @@ import { client } from '../../printer'
 import { ROUTE_NAME } from '../../router/routes'
 import { amsPrefix } from '../../utils/ams'
 import { humIcon } from '../../utils/icon'
+import { getCurrentDevice } from '../../utils/device'
 import { usePrinterStore } from '../../stores/printer'
+import ManualSpoolDialog from '../../components/ManualSpoolDialog.vue'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -86,6 +95,11 @@ const currentAmsId = ref<string | undefined>(device.value && device.value.ams.am
 const currentAms = computed(() => device.value?.ams.ams.find(ams => ams.id === currentAmsId.value))
 const showSettingsPopover = ref(false)
 const settingsActions: PopoverAction[] = [{ type: 'auto-refill', text: t('auto_refill') }]
+
+const showSpoolDialog = ref(false)
+const spoolSerial = ref('')
+const spoolSlotIndex = ref(0)
+const spoolSlotName = ref('')
 
 watch(device, () => {
   if (!currentAmsId.value && device.value && device.value.ams.ams.length > 0) {
@@ -98,6 +112,12 @@ const handleTrayAction = (amsId: number, tray: DeviceTray, action: PopoverAction
   switch (action.type) {
     case 'edit':
       router.push({ name: ROUTE_NAME.FILAMENT_EDIT, params: { ams_id: amsId, tray_id: tray.id } })
+      break
+    case 'spool':
+      spoolSerial.value = client.connectOptions?.serial ?? getCurrentDevice()?.serial ?? ''
+      spoolSlotIndex.value = Number(tray.id) === 254 ? 254 : amsId * 4 + Number(tray.id)
+      spoolSlotName.value = Number(tray.id) === 254 ? t('external_spool') : `AMS-${amsPrefix(String(amsId))}${Number(tray.id) + 1}`
+      showSpoolDialog.value = true
       break
     case 'load':
       if (Number(tray.id) === 254) {
@@ -143,7 +163,7 @@ const handleSettingsSelect = (action: PopoverAction) => {
   console.log(`[FilamentPage] settings action: ${action.type}`)
   showSettingsPopover.value = false
   if (action.type === 'auto-refill') {
-    showToast({ message: t('developing'), position: 'bottom' })
+    router.push({ name: ROUTE_NAME.FILAMENT_AUTO_REFILL })
   }
 }
 </script>

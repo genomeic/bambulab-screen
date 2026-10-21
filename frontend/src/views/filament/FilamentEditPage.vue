@@ -8,7 +8,7 @@
           <option v-if="isCustomFilament" value="Custom">{{ t('custom') }}</option>
         </select>
         <select class="filament" v-model="filamentId" :disabled="isReadonly || isCustomFilament">
-          <option v-for="item in getFilamentListOf(manufacturer)" :key="item.filament_id" :value="item.filament_id">{{ item.filament_name }}</option>
+          <option v-for="item in filamentOptions" :key="item.filament_id" :value="item.filament_id">{{ item.filament_name }}</option>
           <option v-if="manufacturer === 'Custom' && isCustomFilament" :value="tray?.tray_info_idx">{{ tray?.tray_type }}</option>
         </select>
       </div>
@@ -25,12 +25,12 @@
         <label class="form-label">{{ t('nozzle_temperature') }}</label>
         <div class="temperature-field">
           {{ t('temp_min') }}
-          <span>{{ isCustomFilament ? tray?.nozzle_temp_min : getSelectedFilament()?.min_temperature || 0 }}</span>
+          <span>{{ isCustomFilament ? tray?.nozzle_temp_min : selectedFilament?.min_temperature || 0 }}</span>
           °C
         </div>
         <div class="temperature-field">
           {{ t('temp_max') }}
-          <span>{{ isCustomFilament ? tray?.nozzle_temp_max : getSelectedFilament()?.max_temperature || 0 }}</span>
+          <span>{{ isCustomFilament ? tray?.nozzle_temp_max : selectedFilament?.max_temperature || 0 }}</span>
           °C
         </div>
       </div>
@@ -99,18 +99,21 @@ const getCurrentFilament = () => {
   const result = filamentList.find(item => item.filament_id === tray.value?.tray_info_idx)
   return result as FilamentVendor || null
 }
-const getSelectedFilament = () => {
-  const result = filamentList.find(item => item.filament_id === filamentId.value)
-  return result as FilamentVendor || null
-}
-const getFilamentListOf = (manufacturer: string) => filamentList.filter(item => item.manufacturer === manufacturer) as FilamentVendor[]
-const isCustomFilament = computed(() => getCurrentFilament() === null)
-
 const currentFilament: Ref<FilamentVendor | null> = ref(getCurrentFilament())
 const manufacturer = ref(currentFilament.value?.manufacturer || 'Custom')
 const filamentId = ref(tray.value?.tray_info_idx)
 const trayColor = ref('')
 const showColorPicker = ref(false)
+
+// computed (instead of functions called from the template) so the dropdown is
+// only rebuilt when the selection changes rather than on every device push,
+// which can arrive dozens of times per second.
+const selectedFilament = computed(() => {
+  const result = filamentList.find(item => item.filament_id === filamentId.value)
+  return result as FilamentVendor || null
+})
+const filamentOptions = computed(() => filamentList.filter(item => item.manufacturer === manufacturer.value) as FilamentVendor[])
+const isCustomFilament = computed(() => getCurrentFilament() === null)
 
 const hextoRGB = (color: string) => {
   const parsedColor = colord(`#${color.replace('#', '').slice(0,6)}`)
@@ -139,7 +142,7 @@ const onManufacturerChange = () => {
     filamentId.value = isCustomFilament.value ? tray.value?.tray_info_idx : ''
     return
   }
-  const list = getFilamentListOf(manufacturer.value)
+  const list = filamentOptions.value
   if (list.length > 0) {
     filamentId.value = list[0].filament_id
   }
@@ -194,7 +197,7 @@ const handleReset = async () => {
 
 const handleConfirm = async () => {
   if (!tray.value) return
-  const filament = getSelectedFilament() || {
+  const filament = selectedFilament.value || {
     filament_id: tray.value.tray_info_idx,
     material: tray.value.tray_type,
     min_temperature: Number(tray.value.nozzle_temp_min),

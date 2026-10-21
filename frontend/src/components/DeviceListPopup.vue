@@ -54,8 +54,8 @@
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { connectPrinter } from '../printer'
-import { getCurrentDevice, setCurrentDevice, getDevices } from '../utils/device'
+import { getCurrentDevice, getDevices } from '../utils/device'
+import { switchToDevice } from '../stores/fleet'
 import { showToast } from 'vant'
 import { ROUTE_NAME } from '../router/routes'
 
@@ -89,10 +89,11 @@ const handleEditDevice = (serial: string) => {
 const handleCellClick = (serial: string) => {
   if (currentSerial.value === serial) return
   currentSerial.value = serial
-  setCurrentDevice(serial)
-  const current = getCurrentDevice()
-  if (current) {
-    connectPrinter(current)
+  // route through the fleet manager so the previous active device returns to
+  // the overview pool and no duplicate fleet client stays connected
+  if (!switchToDevice(serial)) {
+    currentSerial.value = getCurrentDevice()?.serial ?? ''
+    return
   }
   showToast({
     message: t('switch_success'),

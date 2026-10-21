@@ -8,6 +8,7 @@ import android.util.Log;
 import fi.iki.elonen.NanoHTTPD;
 import fi.iki.elonen.NanoWSD;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.text.SimpleDateFormat;
@@ -70,6 +71,33 @@ public final class WebService extends NanoWSD {
         Log.e(TAG, "failed to serve device info", e);
         return NanoHTTPD.newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "Failed to export device info");
       }
+    }
+
+    if ("/api/camera".equals(uri)) {
+      String serial = session.getParms().get("serial");
+      byte[] frame = CameraStreamManager.getInstance().getFrame(serial);
+      if (frame == null) {
+        Response response = NanoHTTPD.newFixedLengthResponse(
+          Response.Status.NOT_FOUND, "text/plain", "no frame yet");
+        response.addHeader("Cache-Control", "no-store");
+        return response;
+      }
+      Response response = NanoHTTPD.newFixedLengthResponse(
+        Response.Status.OK, "image/jpeg", new ByteArrayInputStream(frame), frame.length);
+      response.addHeader("Cache-Control", "no-store");
+      response.addHeader("Pragma", "no-cache");
+      return response;
+    }
+
+    if ("/api/camera/status".equals(uri)) {
+      String serial = session.getParms().get("serial");
+      Response response = NanoHTTPD.newFixedLengthResponse(
+        Response.Status.OK,
+        "text/plain; charset=utf-8",
+        CameraStreamManager.getInstance().getStatus(serial)
+      );
+      response.addHeader("Cache-Control", "no-store");
+      return response;
     }
 
     return serveStatic(session);

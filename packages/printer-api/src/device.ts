@@ -24,6 +24,16 @@ export type DevicePrint = {
   bed_temper: number
   bed_target_temper: number
 
+  // chamber (H2 series pushes it via `ctc`, normalized by PrinterClient; P1 may push flat values)
+  chamber_temper?: number
+  chamber_target_temper?: number
+
+  // H2 series sections (raw, normalized into legacy fields by PrinterClient)
+  extruder?: any
+  nozzle?: any
+  ctc?: any
+  active_tool?: number
+
   // fan speed
   fan_gear: number
 
@@ -113,4 +123,25 @@ export type DeviceHMS = {
 export type DeviceState = {
   module?: Module[]
   print?: DevicePrint
+  /** Printer model from `info.get_version`, e.g. "Bambu Lab P1S" / "Bambu Lab H2D" / "Bambu Lab A1 Mini" */
+  model?: string
+}
+
+/** Serial number prefixes → model name (without the "Bambu Lab " prefix) */
+export const SERIAL_PREFIX_MODEL: Record<string, string> = {
+  '00M': 'X1C', '00W': 'X1', '03W': 'X1E', '20P': 'X2D',
+  '01S': 'P1P', '01P': 'P1S', '22E': 'P2S',
+  '030': 'A1 Mini', '039': 'A1', '26A': 'A2L',
+  '093': 'H2S', '094': 'H2D', '239': 'H2D Pro', '31B': 'H2C',
+}
+
+/** Rough series classification used for feature gating in the UI */
+export function getPrinterSeries(model?: string): 'H2' | 'A1' | 'P1' | 'P2' | 'X1' | 'unknown' {
+  if (!model) return 'unknown'
+  const name = model.replace(/^Bambu Lab\s*/i, '')
+  if (/^H2/.test(name)) return 'H2'
+  if (/^A[12]/.test(name)) return 'A1'
+  if (/^P[12]/.test(name)) return 'P1'
+  if (/^X/.test(name)) return 'X1'
+  return 'unknown'
 }

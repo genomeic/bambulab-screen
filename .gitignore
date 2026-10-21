@@ -34,3 +34,4 @@ android/app/src/main/assets/web/*
 keystore.jks
 
 .claude/
+android/local.properties

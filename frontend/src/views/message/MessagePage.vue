@@ -10,7 +10,16 @@
 
       <div class="card list-panel">
         <div class="list-header">
-          {{ t('assistant') }} {{ device && device.hms.length > 0 ? `(${device.hms.length})` : '' }}
+          <span>{{ t('assistant') }} {{ device && device.hms.length > 0 ? `(${device.hms.length})` : '' }}</span>
+          <van-button
+            v-if="device && device.hms.length > 0"
+            size="small"
+            plain
+            hairline
+            type="danger"
+            :loading="clearing"
+            @click="handleClearErrors"
+          >{{ t('clear_errors') }}</van-button>
         </div>
         <div class="list-body">
           <div
@@ -33,9 +42,11 @@
 import { ref, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { type DeviceHMS } from '@bambulab-p1screen/printer-api'
+import { showConfirmDialog, showToast } from 'vant'
 import QRCode from 'qrcode'
 import { usePrinterStore } from '../../stores/printer'
-import hmsData from '../../assets/devicehms_01S.json'
+import { client } from '../../printer'
+import { hmsTableFor } from '../../utils/hmsTable'
 
 const { locale, t } = useI18n()
 const { device } = usePrinterStore()
@@ -60,6 +71,44 @@ watch(selectedMsg, async () => {
 }, { immediate: true })
 
 const msgLevel = (msg: DeviceHMS) => (msg.code >> 16)
+
+// Clear the HMS list via Bambu's clean_print_error command (same command
+// BambuStudio/Handy send). The local list is cleared optimistically once the
+// printer acknowledges; if it doesn't, errors will just re-appear on the next
+// status push, which is the honest fallback.
+const clearing = ref(false)
+const handleClearErrors = async () => {
+  if (!device.value || clearing.value) return
+  try {
+    await showConfirmDialog({
+      message: t('confirm_clear_errors'),
+      cancelButtonText: t('cancel'),
+      confirmButtonText: t('confirm'),
+    })
+  } catch {
+    return
+  }
+  clearing.value = true
+  try {
+    await client.request('print.clean_print_error', {
+      task_id: device.value.task_id || '0',
+      subtask_id: device.value.subtask_id || '0',
+    })
+    device.value.hms = []
+    selectedMsg.value = null
+    showToast({ message: t('clear_errors_done'), position: 'bottom' })
+  } catch (error: any) {
+    const message = String(error?.message ?? '')
+    showToast({
+      message: message.includes('84033543') || message.includes('verify failed')
+        ? t('option_blocked_by_firmware')
+        : t('failed', { message }),
+      position: 'bottom',
+    })
+  } finally {
+    clearing.value = false
+  }
+}
 const ecode = (msg: DeviceHMS, readable: boolean) => {
   let code = `${(msg.attr >> 16).toString(16).padStart(4, '0')}-${(msg.attr & 0xffff).toString(16).padStart(4, '0')}-${(msg.code >> 16).toString(16).padStart(4, '0')}-${(msg.code & 0xffff).toString(16).padStart(4, '0')}`.toUpperCase()
   if (!readable) code = code.replace(/-/g, '')
@@ -67,10 +116,13 @@ const ecode = (msg: DeviceHMS, readable: boolean) => {
 }
 const url = (msg: DeviceHMS) => `https://e.bambulab.com/?e=${ecode(msg, false)}`
 const text = (msg: DeviceHMS) => {
+  const hmsData = hmsTableFor(client.connectOptions?.serial)
   const hmsList = hmsData['data']['device_hms'][locale.value.startsWith('zh') ? 'zh-cn' : 'en']
   const code = ecode(msg, false)
   const hmsInfo = hmsList.find((item: any) => item.ecode === code)
-  return hmsInfo?.intro || ''
+  return hmsInfo?.intro || (locale.value.startsWith('zh')
+    ? '未收录的助手信息，请扫码或点击上方链接查看官方说明。'
+    : 'Unknown assistant message. Scan the QR code or open the link above for details.')
 }
 </script>
 
@@ -124,6 +176,9 @@ const text = (msg: DeviceHMS) => {
 }
 
 .list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 8px 16px;
   font-size: 16px;
   font-weight: 500;

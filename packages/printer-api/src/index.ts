@@ -19,4 +19,5 @@ export type {
   DeviceState,
   DeviceTray,
 } from './device'
+export { getPrinterSeries, SERIAL_PREFIX_MODEL } from './device'
 export type { Module } from './module'

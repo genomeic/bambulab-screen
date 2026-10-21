@@ -36,22 +36,26 @@ export const getPrinterConnectionMode = () => {
   return client.connectOptions.username === 'bblp' ? 'local' : 'cloud'
 }
 
-export const connectPrinter = (device: DeviceRecord) => {
+export const getConnectionOptions = (device: DeviceRecord) => {
   if (device.connect === 'cloud' && device.from !== 'local') {
     const user = getCloudUser()
     const region = device.from === 'global' ? 'global' : 'china'
-    return client.connect({
+    return {
       mqttUrl: createMqttUrl(CLOUD_MQTT_BROKERS[region]),
       username: user?.username ?? '',
       password: user?.accessToken ?? '',
       serial: device.serial,
-    })
+    }
   }
 
-  return client.connect({
+  return {
     mqttUrl: createMqttUrl(device.ip),
     username: 'bblp',
     password: device.code,
     serial: device.serial,
-  })
+  }
+}
+
+export const connectPrinter = (device: DeviceRecord) => {
+  return client.connect(getConnectionOptions(device))
 }

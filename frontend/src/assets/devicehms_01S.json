@@ -6,6 +6,14 @@
     "device_hms": {
       "en": [
         {
+          "ecode": "050002000003000A",
+          "intro": "Device network/streaming service error (reported by the printer itself; printing control in this app is not affected). Check the printer network connection; if it recurs, restart the printer or update firmware."
+        },
+        {
+          "ecode": "0500060000020006",
+          "intro": "Toolhead camera service error (H2 series, reported by the printer itself). Printing control is not affected. Restart the printer; if it recurs, verify the toolhead camera works (e.g. live view in Bambu Handy/Studio), update firmware or contact support."
+        },
+        {
           "ecode": "0500030000020019",
           "intro": ""
         },
@@ -15591,6 +15599,14 @@
         }
       ],
       "zh-cn": [
+        {
+          "ecode": "050002000003000A",
+          "intro": "设备网络/流媒体服务异常（打印机自身上报，不影响本App的打印控制）。请检查打印机网络连接后重试；若反复出现，可重启打印机或更新固件。"
+        },
+        {
+          "ecode": "0500060000020006",
+          "intro": "工具头摄像头服务异常（H2系列，打印机自身上报）。不影响打印控制。请重启打印机重试；若反复出现，请检查工具头摄像头功能（如拓竹App/Studio中查看实时画面）是否正常，必要时更新固件或联系售后。"
+        },
         {
           "ecode": "0500030000020019",
           "intro": ""

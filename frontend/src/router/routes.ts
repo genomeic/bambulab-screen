@@ -1,5 +1,7 @@
 import type { RouteRecordRaw } from 'vue-router'
 import HomePage from '../views/home/HomePage.vue'
+import OverviewPage from '../views/overview/OverviewPage.vue'
+import CameraPage from '../views/camera/CameraPage.vue'
 import FilesPage from '../views/home/FilesPage.vue'
 import ControlPage from '../views/control/ControlPage.vue'
 import MotionPage from '../views/control/MotionPage.vue'
@@ -21,6 +23,8 @@ import MessagePage from '../views/message/MessagePage.vue'
 
 export const ROUTE_NAME = {
   HOME: 'home',
+  OVERVIEW: 'overview',
+  CAMERA: 'camera',
   HOME_FILES: 'home-files',
   CONTROL: 'control',
   CONTROL_MOTION: 'control-motion',
@@ -43,6 +47,8 @@ export const ROUTE_NAME = {
 
 export const routes: RouteRecordRaw[] = [
   { path: '/', redirect: { name: ROUTE_NAME.HOME } },
+  { path: '/overview', name: ROUTE_NAME.OVERVIEW, component: OverviewPage },
+  { path: '/camera', name: ROUTE_NAME.CAMERA, component: CameraPage },
   { path: '/home', name: ROUTE_NAME.HOME, component: HomePage },
   { path: '/home/files', name: ROUTE_NAME.HOME_FILES, component: FilesPage },
   { path: '/control', name: ROUTE_NAME.CONTROL, component: ControlPage },

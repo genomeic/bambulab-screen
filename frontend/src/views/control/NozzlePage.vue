@@ -1,7 +1,7 @@
 <template>
   <BasePage :title="t('nozzle_extruder')">
     <div class="nozzle-container">
-      <img src="../../assets/images/extruder_normal_23.png" />
+      <img :src="nozzleImage" />
       <div>
         <label class="extruder-label">{{ t('extruder') }}</label>
         <button class="extruder-btn" type="button" @click="handleMove('e', -10)">
@@ -35,16 +35,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { showDialog, showToast } from 'vant'
 import { TemperatureType } from '@bambulab-p1screen/printer-api'
 import { client } from '../../printer'
 import { usePrinterStore } from '../../stores/printer'
+import { nozzleIndicatorImage } from '../../utils/printerArt'
+import extruderNormalThumbnail from '../../assets/images/extruder_normal_23.png'
 
-const { device } = usePrinterStore()
+const { device, model } = usePrinterStore()
 const { t } = useI18n()
 const showTempPopup = ref(false)
+const nozzleImage = computed(() => nozzleIndicatorImage(model.value, device.value?.nozzle_diameter) || extruderNormalThumbnail)
 const nozzleTypeName = () => {
   return { stainless_steel: t('nozzle_type_stainless_steel'), hardened_steel: t('nozzle_type_hardened_steel'), '': t('unknown') }[device.value?.nozzle_type || '']
 }
@@ -98,7 +101,10 @@ const editNozzle = () => {
 }
 
 .nozzle-container > img {
-  width: 100px;
+  max-width: 100px;
+  max-height: 220px;
+  width: auto;
+  height: auto;
 }
 
 label {

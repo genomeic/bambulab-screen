@@ -16,10 +16,10 @@ android {
 
   signingConfigs {
     release {
-      storeFile file('../keystore.jks')
-      storePassword 'bambulab'
-      keyAlias 'key0'
-      keyPassword 'bambulab'
+      storeFile file('../../../p1screen.keystore')
+      storePassword 'p1screen2026'
+      keyAlias 'p1screen'
+      keyPassword 'p1screen2026'
     }
   }
 
@@ -47,15 +47,22 @@ dependencies {
   implementation 'androidx.core:core-splashscreen:1.0.1'
 }
 
-tasks.register('buildWebAssets', Exec) {
-  workingDir '../../'
-  commandLine 'sh', '-c', 'npm run build:web'
+// Frontend dist is built separately via `npx vite build --config frontend/vite.config.ts`
+// (running vite from Gradle crashed and wiped dist mid-build). Just verify it exists.
+tasks.register('buildWebAssets') {
+  doLast {
+    if (!file('../../dist/web/index.html').exists()) {
+      throw new GradleException('dist/web/index.html missing - run vite build first')
+    }
+  }
 }
 preBuild.dependsOn buildWebAssets
 
 tasks.register('copyApkToDist', Copy) {
   from layout.buildDirectory.dir("outputs/apk")
-  into "../../dist/apk"
+  // Must NOT land inside ../../dist: assets.srcDirs includes ../../dist, so a
+  // copy there gets packaged into the next build and inflates every APK.
+  into "../../apk_out"
   include "**/*.apk"
   includeEmptyDirs = false
 }

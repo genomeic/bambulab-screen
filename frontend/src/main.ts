@@ -1,9 +1,10 @@
 import { createApp } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
-import { ActionSheet, Badge, Button, Checkbox, Slider, Progress, Popup, Popover, Overlay, Dialog, Cell, CellGroup, Empty, Tab, Tabs, Tabbar, TabbarItem, NavBar, Switch, Stepper, Field } from 'vant'
+import { ActionSheet, Badge, Button, Checkbox, Slider, Progress, Popup, Popover, Overlay, Dialog, Cell, CellGroup, Empty, Tab, Tabs, Tabbar, TabbarItem, NavBar, Switch, Stepper, Field, Image as VanImage, List, PullRefresh, Tag, Loading, Icon } from 'vant'
 import App from './App.vue'
 import { i18n } from './i18n'
 import { client, connectPrinter } from './printer'
+import { startFleet } from './stores/fleet'
 import { routes } from './router/routes'
 import { getCurrentDevice } from './utils/device'
 import 'vant/lib/index.css'
@@ -41,6 +42,8 @@ const connectCurrentPrinter = () => {
   if (storedDevice) {
     connectPrinter(storedDevice)
   }
+  // Pre-connect fleet clients at launch so the devices page is near-instant
+  startFleet()
 }
 
 window.__P1ScreenOnAppLifecycle = (state: AppLifecycleState) => {
@@ -63,6 +66,8 @@ window.__P1ScreenOnAppLifecycle = (state: AppLifecycleState) => {
   if (!client.mqttClient?.connected) {
     console.info('[AppLifecycle] foreground: connect printer')
     connectCurrentPrinter()
+  } else {
+    startFleet()
   }
 }
 
@@ -95,6 +100,12 @@ createApp(App)
   .use(Overlay)
   .use(Checkbox)
   .use(Field)
+  .use(VanImage)
+  .use(List)
+  .use(PullRefresh)
+  .use(Tag)
+  .use(Loading)
+  .use(Icon)
   .mount('#app')
 
 window.addEventListener('contextmenu', (event) => {

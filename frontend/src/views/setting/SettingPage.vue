@@ -8,6 +8,18 @@
 
       <van-cell-group inset>
         <van-cell
+          :title="t('auto_deduct_filament')"
+          :label="t('auto_deduct_filament_desc')"
+          center
+        >
+          <template #right-icon>
+            <van-switch v-model="autoDeduct" @change="onAutoDeductChange" size="24px" />
+          </template>
+        </van-cell>
+      </van-cell-group>
+
+      <van-cell-group inset>
+        <van-cell
           :title="t('language')"
           :value="languageLabel"
           is-link
@@ -35,6 +47,14 @@
             <van-switch v-model="keepScreenOn" @change="onKeepScreenOnChange" size="24px" />
           </template>
         </van-cell>
+        <van-cell
+          v-if="isAndroidApp() && keepScreenOn"
+          :title="t('screen_off_timeout')"
+          :label="t('screen_off_timeout_desc')"
+          :value="screenOffTimeoutLabel"
+          is-link
+          @click="showScreenOffSheet = true"
+        />
         <van-cell v-if="showExportDeviceInfo" :title="t('export_device_info')" is-link @click="handleExportDeviceInfo" />
         <van-cell
           v-if="isAndroidApp()"
@@ -53,6 +73,14 @@
       :actions="languageActions"
       @select="handleLanguageSelect"
     />
+
+    <van-action-sheet
+      v-model:show="showScreenOffSheet"
+      :description="t('screen_off_timeout')"
+      :cancel-text="t('cancel')"
+      :actions="screenOffActions"
+      @select="handleScreenOffSelect"
+    />
   </BasePage>
 </template>
 
@@ -64,6 +92,7 @@ import semverGt from 'semver/functions/gt'
 import { getCurrentDevice } from '../../utils/device'
 import { getLocalePreference, setLocalePreference, type LocalePreference } from '../../i18n'
 import { usePrinterStore } from '../../stores/printer'
+import { isAutoDeductEnabled, setAutoDeductEnabled } from '../../utils/spoolStore'
 
 const { t, locale } = useI18n()
 const currentVersion = import.meta.env.APP_VERSION
@@ -74,7 +103,11 @@ const languagePref = ref<LocalePreference>(getLocalePreference())
 const landscapeHideStatusBar = ref(false)
 const forceLandscape = ref(false)
 const keepScreenOn = ref(false)
+const screenOffTimeout = ref(0)
+const autoDeduct = ref(isAutoDeductEnabled())
+const onAutoDeductChange = (value: boolean) => setAutoDeductEnabled(value)
 const showLanguageSheet = ref(false)
+const showScreenOffSheet = ref(false)
 
 type GitHubRelease = {
   tag_name?: string
@@ -94,6 +127,9 @@ type P1ScreenBridge = {
   setForceLandscape?: (force: boolean) => void
   getKeepScreenOn?: () => boolean
   setKeepScreenOn?: (keepOn: boolean) => void
+  getScreenOffTimeout?: () => number
+  setScreenOffTimeout?: (minutes: number) => void
+  setPrinting?: (printing: boolean) => void
 }
 
 type P1ScreenWindow = Window & {
@@ -131,6 +167,24 @@ const handleLanguageSelect = (action: { name: string, value: LocalePreference })
   setLocalePreference(action.value)
   locale.value = resolveLocale(action.value)
   showLanguageSheet.value = false
+}
+
+const SCREEN_OFF_OPTIONS = [1, 5, 10, 30]
+
+const screenOffTimeoutLabel = computed(() => {
+  if (screenOffTimeout.value <= 0) return t('screen_off_never')
+  return `${screenOffTimeout.value} ${t('unit_minute')}`
+})
+
+const screenOffActions = computed(() => [
+  { name: t('screen_off_never'), value: 0 },
+  ...SCREEN_OFF_OPTIONS.map(minutes => ({ name: `${minutes} ${t('unit_minute')}`, value: minutes })),
+])
+
+const handleScreenOffSelect = (action: { name: string, value: number }) => {
+  screenOffTimeout.value = action.value
+  getNativeBridge()?.setScreenOffTimeout?.(action.value)
+  showScreenOffSheet.value = false
 }
 
 const getVersionTag = (value: string) => value.match(/^(v\d+\.\d+\.\d+)/i)?.[1] ?? 'v0.0.0'
@@ -173,6 +227,7 @@ onMounted(() => {
     landscapeHideStatusBar.value = !!getNativeBridge()?.getLandscapeHideStatusBar?.()
     forceLandscape.value = !!getNativeBridge()?.getForceLandscape?.()
     keepScreenOn.value = !!getNativeBridge()?.getKeepScreenOn?.()
+    screenOffTimeout.value = getNativeBridge()?.getScreenOffTimeout?.() ?? 0
   }
 })
 

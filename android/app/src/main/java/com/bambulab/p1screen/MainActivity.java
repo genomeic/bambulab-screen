@@ -43,6 +43,7 @@ public final class MainActivity extends Activity {
   private static final String PREF_LANDSCAPE_HIDE_STATUS_BAR = "landscape_hide_status_bar";
   private static final String PREF_FORCE_LANDSCAPE = "force_landscape";
   private static final String PREF_KEEP_SCREEN_ON = "keep_screen_on";
+  private static final String PREF_SCREEN_OFF_TIMEOUT_MIN = "screen_off_timeout_min";
   private static final String GET_DEVICE_INFO_SCRIPT =
       "(function(){"
     + "try{"
@@ -60,6 +61,63 @@ public final class MainActivity extends Activity {
   private SharedPreferences prefs;
   private NativeBridge nativeBridge;
   private final Handler mainHandler = new Handler(Looper.getMainLooper());
+  private volatile boolean printing = false;
+  private volatile boolean screenDimmed = false;
+  private final Runnable screenOffRunnable = new Runnable() {
+    @Override
+    public void run() {
+      if (nativeBridge == null) return;
+      if (printing) {
+        // keep the screen lit while a print is running
+        scheduleScreenOff();
+        return;
+      }
+      WindowManager.LayoutParams attrs = getWindow().getAttributes();
+      if (attrs.screenBrightness != 0f) {
+        attrs.screenBrightness = 0f;
+        getWindow().setAttributes(attrs);
+        screenDimmed = true;
+      }
+    }
+  };
+
+  private int screenOffTimeoutMinutes() {
+    return prefs.getInt(PREF_SCREEN_OFF_TIMEOUT_MIN, 0);
+  }
+
+  private void scheduleScreenOff() {
+    mainHandler.removeCallbacks(screenOffRunnable);
+    int minutes = screenOffTimeoutMinutes();
+    if (minutes > 0) {
+      mainHandler.postDelayed(screenOffRunnable, minutes * 60_000L);
+    }
+  }
+
+  private void wakeScreen() {
+    if (screenDimmed) {
+      screenDimmed = false;
+      WindowManager.LayoutParams attrs = getWindow().getAttributes();
+      attrs.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+      getWindow().setAttributes(attrs);
+    }
+  }
+
+  /** Keeps FLAG_KEEP_SCREEN_ON when the always-on toggle is set, or when an
+   *  idle timeout is configured (so the system never sleeps before we dim). */
+  private void updateScreenKeepFlags() {
+    if (nativeBridge.getKeepScreenOn() || screenOffTimeoutMinutes() > 0) {
+      getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    } else {
+      getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+  }
+
+  @Override
+  public void onUserInteraction() {
+    super.onUserInteraction();
+    wakeScreen();
+    scheduleScreenOff();
+  }
 
   @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
   @Override
@@ -70,9 +128,7 @@ public final class MainActivity extends Activity {
     if (nativeBridge.getForceLandscape()) {
       setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
     }
-    if (nativeBridge.getKeepScreenOn()) {
-      getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-    }
+    updateScreenKeepFlags();
 
     startWebService();
 
@@ -151,6 +207,8 @@ public final class MainActivity extends Activity {
   @Override
   protected void onResume() {
     super.onResume();
+    wakeScreen();
+    scheduleScreenOff();
     applyFullscreen();
     dispatchAppLifecycleEvent(APP_LIFECYCLE_FOREGROUND);
   }
@@ -158,6 +216,7 @@ public final class MainActivity extends Activity {
   @Override
   protected void onPause() {
     super.onPause();
+    mainHandler.removeCallbacks(screenOffRunnable);
     dispatchAppLifecycleEvent(APP_LIFECYCLE_BACKGROUND);
   }
 
@@ -261,12 +320,52 @@ public final class MainActivity extends Activity {
     public void setKeepScreenOn(boolean keepOn) {
       prefs.edit().putBoolean(PREF_KEEP_SCREEN_ON, keepOn).apply();
       mainHandler.post(() -> {
-        if (keepOn) {
-          getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        } else {
-          getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        }
+        updateScreenKeepFlags();
+        wakeScreen();
+        scheduleScreenOff();
       });
+    }
+
+    @JavascriptInterface
+    public int getScreenOffTimeout() {
+      return screenOffTimeoutMinutes();
+    }
+
+    @JavascriptInterface
+    public void setScreenOffTimeout(int minutes) {
+      prefs.edit().putInt(PREF_SCREEN_OFF_TIMEOUT_MIN, Math.max(0, minutes)).apply();
+      mainHandler.post(() -> {
+        updateScreenKeepFlags();
+        wakeScreen();
+        scheduleScreenOff();
+      });
+    }
+
+    @JavascriptInterface
+    public void setPrinting(boolean value) {
+      printing = value;
+      mainHandler.post(() -> {
+        if (printing) {
+          wakeScreen();
+        }
+        scheduleScreenOff();
+      });
+    }
+
+    @JavascriptInterface
+    public void startCamera(String serial, String ip, String code) {
+      CameraStreamManager.getInstance().start(serial, ip, code);
+    }
+
+    @JavascriptInterface
+    public void stopCamera(String serial) {
+      CameraStreamManager.getInstance().stop(serial);
+    }
+
+    /** idle | connecting | streaming | reconnecting | error:&lt;reason&gt; | not_started */
+    @JavascriptInterface
+    public String getCameraStatus(String serial) {
+      return CameraStreamManager.getInstance().getStatus(serial);
     }
   }
 
@@ -414,6 +513,7 @@ public final class MainActivity extends Activity {
 
   @Override
   protected void onDestroy() {
+    CameraStreamManager.getInstance().stopAll();
     stopWebService();
     if (webView != null) {
       ViewGroup parent = (ViewGroup) webView.getParent();

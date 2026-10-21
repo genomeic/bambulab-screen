@@ -1,7 +1,7 @@
 <template>
   <BasePage :title="t('control')">
     <div class="control-page">
-      <img src="../../assets/images/printer-inside.png" class="background-image" />
+      <img v-if="insideImage" class="background-image" :src="insideImage" />
       <div class="control-grid">
         <div class="card fan-card" clickable @click="showFanSpeedPopup = true">
           <div class="card-icon">
@@ -40,7 +40,7 @@
             <i-material-symbols-chevron-right-rounded class="arrow" />
           </div>
           <div class="nozzle-temp">
-            <img class="nozzle-image" src="../../assets/images/extruder_normal_23.png" />
+            <img class="nozzle-image" :src="nozzleImage" />
             <div class="card-label">
               <div v-if="device && device?.nozzle_target_temper - device?.nozzle_temper > 2" :style="{ color: 'orange' }">
                 <span class="current-temp">{{ Math.floor(device?.nozzle_temper ?? 0) }}°C</span>
@@ -66,6 +66,21 @@
             /{{ Math.floor(Number(device?.bed_target_temper ?? '0')) }}°C
           </div>
           <i-material-symbols-chevron-right-rounded class="arrow" />
+        </div>
+
+        <div v-if="showChamber" class="card chamber-card">
+          <div class="card-icon">
+            <i-material-symbols-device-thermostat />
+          </div>
+          <div class="card-title">{{ t('chamber_temperature') }}</div>
+          <div class="card-label">
+            <div v-if="device && (device?.chamber_target_temper ?? 0) - (device?.chamber_temper ?? 0) > 2" :style="{ color: 'orange' }">
+              <span class="current-temp">{{ Math.floor(device?.chamber_temper ?? 0) }}°C</span>
+              <i-material-symbols-arrow-upward-rounded class="temp-arrow" />
+            </div>
+            <span v-else class="current-temp">{{ Math.floor(device?.chamber_temper ?? 0) }}°C</span>
+            /{{ Math.floor(Number(device?.chamber_target_temper ?? '0')) }}°C
+          </div>
         </div>
 
       </div>
@@ -107,19 +122,23 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { FanType, GcodeState, LightType, PrintSpeedLevel, TemperatureType } from '@bambulab-p1screen/printer-api'
+import { getPrinterSeries } from '@bambulab-p1screen/printer-api'
 import { ROUTE_NAME } from '../../router/routes'
 import { showDialog } from 'vant'
 import { client } from '../../printer'
 import { lightIcon } from '../../utils/icon'
+import { printerInsideImage, nozzleIndicatorImage } from '../../utils/printerArt'
 import { usePrinterStore } from '../../stores/printer'
 
 import fanOffIcon from '../../assets/images/monitor_fan_off.svg'
 import nozzleOffIcon from '../../assets/images/monitor_nozzle_temp.svg'
 import bedOffIcon from '../../assets/images/monitor_bed_temp.svg'
+import extruderNormalThumbnail from '../../assets/images/extruder_normal_23.png'
 
 const router = useRouter()
 const { t } = useI18n()
-const { device } = usePrinterStore()
+const { device, model } = usePrinterStore()
+const nozzleImage = computed(() => nozzleIndicatorImage(model.value, device.value?.nozzle_diameter) || extruderNormalThumbnail)
 const lightState = computed(() => device.value?.lights_report?.find(item => item.node === LightType.Chamber)?.mode === 'on')
 const lightSwitchValue = ref(lightState.value)
 
@@ -180,6 +199,14 @@ const fanStatusText = computed(() => {
   return count === 0 ? t('fan_none') : t('fan_running', { count })
 })
 
+// H2 series has an actively heated/conditioned chamber (pushed via `ctc`); other models keep the old layout
+const showChamber = computed(() =>
+  getPrinterSeries(model.value) === 'H2' && device.value?.chamber_temper !== undefined
+)
+
+// model-specific artwork (P1 keeps the original photo renders)
+const insideImage = computed(() => printerInsideImage(model.value))
+
 </script>
 
 <style scoped>
@@ -213,7 +240,7 @@ const fanStatusText = computed(() => {
   grid-template-rows: 60px 100px 60px 1fr;
   grid-template-areas:
     'fan speed motion'
-    'nozzle . .'
+    'nozzle chamber .'
     'bed . .'
     '. . .';
 }
@@ -305,6 +332,7 @@ const fanStatusText = computed(() => {
 .motion-card { grid-area: motion; }
 .nozzle-card { grid-area: nozzle; }
 .heatbed-card { grid-area: bed; }
+.chamber-card { grid-area: chamber; }
 
 .nozzle-card {
   padding: 0 12px;
@@ -383,10 +411,11 @@ const fanStatusText = computed(() => {
 
   .control-grid {
     grid-template-columns: minmax(0, 6fr) minmax(0, 4fr);
-    grid-template-rows: 60px 60px 100px;
+    grid-template-rows: 60px 60px 50px 100px;
     grid-template-areas:
       'fan speed'
       'bed motion'
+      'chamber .'
       'nozzle .';
   }
 

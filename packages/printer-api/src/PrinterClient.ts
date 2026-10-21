@@ -1,6 +1,6 @@
 import mqtt, { type MqttClient } from 'mqtt'
 import ipaddr from 'ipaddr.js'
-import { type DeviceState } from './device'
+import { SERIAL_PREFIX_MODEL, type DeviceState } from './device'
 import {
   FanType,
   TemperatureType,
@@ -71,11 +71,22 @@ export class PrinterClient {
       return null
     }
     this.stopConnection('recreate connection')
+    const previousSerial = this.connectOptions?.serial
     this.connectOptions = options
     this.reportTopic = `device/${serial}/report`
     this.requestTopic = `device/${serial}/request`
+    // Switching to a different printer: drop all stale state from the previous one
+    if (serial !== previousSerial) {
+      this.device = {}
+    }
     this.device.print = undefined
     this.device.module = undefined
+    // Eager model guess from serial prefix so UI artwork is correct before MQTT data arrives
+    const prefixModel = SERIAL_PREFIX_MODEL[serial.slice(0, 3).toUpperCase()]
+    if (prefixModel && !this.device.model) {
+      this.device.model = prefixModel
+    }
+    this.emit(PrinterEvent.MQTT_STATE_CHANGE, null)
 
     try {
       const mqttClient = mqtt.connect(mqttUrl, {
@@ -240,7 +251,7 @@ export class PrinterClient {
     } else {
       const print: any = Object.assign({}, this.device.print)
       for (const key in printData) {
-        if (['ams', 'vt_tray'].includes(key)) {
+        if (['ams', 'vt_tray', 'extruder', 'nozzle', 'ctc'].includes(key)) {
           print[key] = Object.assign({}, print[key])
           for (const key2 in printData[key]) {
             print[key][key2] = printData[key][key2]
@@ -251,7 +262,46 @@ export class PrinterClient {
       }
       this.device.print = print
     }
+    this.normalizeModelFields()
     this.emit(PrinterEvent.PRINT_PUSH_STATUS, printData)
+  }
+
+  /**
+   * H2 series pushes temperatures in new-style sections instead of the legacy
+   * flat fields. Normalize them so all existing UI keeps working:
+   *   print.extruder.info[]  -> nozzle_temper / nozzle_target_temper
+   *   print.ctc.info.temp    -> chamber_temper / chamber_target_temper
+   * Temperatures arrive packed in one uint32: low 16 bits = actual, high 16 bits = target.
+   */
+  private normalizeModelFields() {
+    const p: any = this.device.print
+    if (!p) return
+
+    const unpack = (raw: any): [number, number] => {
+      const t = Math.trunc(Number(raw) || 0)
+      return [t & 0xFFFF, (t >>> 16) & 0xFFFF]
+    }
+
+    const extruders = p.extruder?.info
+    if (Array.isArray(extruders) && extruders.length) {
+      let active = extruders[0]
+      if (extruders.length > 1) {
+        const toolId = Number(p.active_tool)
+        active = extruders.find((e: any) => Number(e.id) === toolId)
+          ?? extruders.find((e: any) => Number(e.stat) === 1)
+          ?? active
+      }
+      const [nozzleTemp, nozzleTarget] = unpack(active.temp)
+      p.nozzle_temper = nozzleTemp
+      p.nozzle_target_temper = nozzleTarget
+    }
+
+    const ctcTemp = p.ctc?.info?.temp
+    if (ctcTemp !== undefined) {
+      const [chamberTemp, chamberTarget] = unpack(ctcTemp)
+      p.chamber_temper = chamberTemp
+      p.chamber_target_temper = chamberTarget
+    }
   }
 
   /**
@@ -261,8 +311,25 @@ export class PrinterClient {
   async updateAllData() {
     this.requestWithoutResponse('pushing.pushall')
 
-    const result = await this.request('info.get_version')
-    this.device.module = result.module
+    try {
+      const result = await this.request('info.get_version')
+      this.device.module = result.module
+      const ota = result.module?.find((item: any) => item.name === 'ota')
+      if (ota?.product_name) {
+        this.device.model = ota.product_name
+      }
+    } catch (err: any) {
+      console.warn(`[PrintClient] info.get_version failed: ${err.message}`)
+    }
+    // Fallback: derive model from serial prefix if the version query failed
+    if (!this.device.model) {
+      const prefix = this.connectOptions?.serial?.slice(0, 3).toUpperCase() ?? ''
+      const fallback = SERIAL_PREFIX_MODEL[prefix]
+      if (fallback) {
+        this.device.model = fallback
+        console.info(`[PrintClient] model fallback from serial prefix ${prefix}: ${fallback}`)
+      }
+    }
   }
 
   async request(command: string, params?: Record<string, any>) {
@@ -306,8 +373,18 @@ export class PrinterClient {
     const pending = this.pendingPublishes.get(sequenceId)
     if (!pending) return false
     this.pendingPublishes.delete(sequenceId)
-    if (result?.toLowerCase() === 'success') {
-      pending.resolve(params)
+    // H2 series omits `result` on successful replies (P/A series send
+    // result:"success"); error replies always carry result/reason, so a
+    // missing result is treated as success.
+    if (result === undefined || result.toLowerCase() === 'success') {
+      // ...but some rejections arrive without result/reason, only err_code
+      // (e.g. skip_objects on a finished print -> err_code 84033543).
+      const errCode = Number(params?.err_code ?? 0)
+      if (Number.isFinite(errCode) && errCode > 0) {
+        pending.reject(new Error(`printer error ${errCode}`))
+      } else {
+        pending.resolve(params)
+      }
     } else {
       pending.reject(new Error(reason))
     }
@@ -388,10 +465,56 @@ export class PrinterClient {
     const result = await this.request('system.ledctrl', {
       'led_node': type,
       'led_mode': on ? 'on' : 'off',
+      // Newer firmware (H2 series) rejects the command unless all blink
+      // scheduling fields are present (mirrors pybambu's payload).
+      'led_on_time': 500,
+      'led_off_time': 500,
+      'loop_times': 0,
+      'interval_time': 0,
     })
     if (!this.device.print) return
     const light = this.device.print.lights_report?.find(item => item.node === result.led_node)
     if (light) light.mode = result.led_mode
+  }
+
+  /**
+   * Starts printing a project file (cloud task reprint or local file).
+   * Mirrors pybambu's PRINT_PROJECT_FILE_TEMPLATE.
+   */
+  async startProject(task: {
+    param?: string
+    url?: string
+    projectId?: string | number
+    profileId?: string | number
+    taskId?: string | number
+    subtaskId?: string | number
+    useAms?: boolean
+    bedType?: string
+  }) {
+    await this.request('print.project_file', {
+      'param': task.param ?? '',
+      'url': task.url ?? '',
+      'bed_type': task.bedType ?? 'auto',
+      'timelapse': false,
+      'bed_leveling': true,
+      'flow_cali': true,
+      'vibration_cali': true,
+      'layer_inspect': true,
+      'use_ams': task.useAms ?? true,
+      'ams_mapping': [],
+      'profile_id': String(task.profileId ?? '0'),
+      'project_id': String(task.projectId ?? '0'),
+      'subtask_id': String(task.subtaskId ?? '0'),
+      'task_id': String(task.taskId ?? '0'),
+    })
+  }
+
+  /**
+   * Skips the given objects during a print ("skip objects").
+   * Object ids come from the printer's `objects_list` report.
+   */
+  async skipObjects(objIds: number[]) {
+    await this.request('print.skip_objects', { obj_list: objIds })
   }
 
   private setTemperatureSupport() {

@@ -9,13 +9,16 @@
     @select="handleTrayAction"
   >
     <template #reference>
-      <div class="tray" @click.stop="handleTrayClick">
-        <div class="remain" :style="{ visibility: isExt || !props.tray.remain || props.tray.remain === -1 ? 'hidden' : 'visible' }">
-          <div :style="{ backgroundColor: bgColor, width: `${props.tray.remain}%` }"></div>
+      <div class="tray" :class="{ 'has-weight': materialWeight !== null }" @click.stop="handleTrayClick">
+        <div class="remain" :style="{ visibility: isExt || effectiveRemain === -1 ? 'hidden' : 'visible' }">
+          <div :style="{ backgroundColor: bgColor, width: `${effectiveRemain}%` }"></div>
         </div>
         <div class="filament" :style="{ '--tray-bg': bgColor }"></div>
         <span class="name" :style="{ color: textColor }">{{ name }}</span>
-        <span class="material" :style="{ color: textColor }">{{ material }}</span>
+        <span class="material" :style="{ color: textColor }">
+          <span class="material-type">{{ materialType }}</span>
+          <span v-if="materialWeight !== null" class="material-weight">{{ materialWeight }}g</span>
+        </span>
         <template v-if="exist || isExt">
           <span v-if="readonly" class="icon icon-readonly" :style="{ backgroundColor: textColor}"></span>
           <span v-else class="icon icon-edit" :style="{ backgroundColor: textColor}"></span>
@@ -35,6 +38,8 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { DeviceTray } from '@bambulab-p1screen/printer-api'
 import { type PopoverAction } from 'vant'
+import { client } from '../printer'
+import { getManualRemainPercent, getManualSpool, getSpoolSerial, spoolStoreVersion } from '../utils/spoolStore'
 
 const { t } = useI18n()
 
@@ -59,6 +64,7 @@ const actions = computed<PopoverAction[]>(() => {
 
   const menu: PopoverAction[] = [
     { type: 'edit', text: readonly.value ? t('view') : t('edit') },
+    { type: 'spool', text: t('set_remaining') },
   ]
 
   // if (isLoading.value) { // 换料中
@@ -80,9 +86,42 @@ const actions = computed<PopoverAction[]>(() => {
   return menu
 })
 
-const material = computed(() => props.tray.tray_type || '?')
+// The type and the remaining grams are stacked: a single line is too narrow
+// for "ABS·340g" and got clipped on real devices.
+const materialType = computed(() => props.tray.tray_type || '?')
+const materialWeight = computed(() => {
+  const remaining = manualSpool.value?.remaining
+  return typeof remaining === 'number' ? Math.round(remaining) : null
+})
 const color = computed(() => `#${props.tray.tray_color}`)
 const exist = computed(() => props.tray.tray_info_idx?.length > 0)
+
+// Manual spool bookkeeping (community feature): a manually-entered remaining
+// amount replaces the printer-reported remain value.
+const slotIndex = computed(() => (Number(props.tray.id) === 254 ? 254 : props.amsId * 4 + Number(props.tray.id)))
+const manualSpool = computed(() => {
+  spoolStoreVersion.value // reactive dependency on localStorage mutations
+  const serial = getSpoolSerial()
+  if (!serial) return undefined
+  return getManualSpool(serial, slotIndex.value)
+})
+const manualPercent = computed(() => {
+  spoolStoreVersion.value
+  const serial = getSpoolSerial()
+  if (!serial) return null
+  return getManualRemainPercent(serial, slotIndex.value)
+})
+
+// -1 = empty slot (hide bar). AMS 2 Pro (H2D) may report remain=0 or omit the
+// field entirely even with filament loaded, so any non-positive/missing value
+// on a loaded slot shows as full — consistent with AMSIndicator.
+const effectiveRemain = computed(() => {
+  if (manualPercent.value !== null) return manualPercent.value
+  const remain = Number(props.tray.remain)
+  if (remain === -1) return -1
+  if (remain > 0) return remain
+  return exist.value ? 100 : -1
+})
 const readonly = computed(() => props.tray.tag_uid !== '0000000000000000')
 const isLoading = computed(() => props.trayNow !== props.trayTar)
 const isCurrent = computed(() => trayEqual(props.trayNow))
@@ -118,11 +157,18 @@ const textColor = computed(() => {
 
 <style scoped>
 .tray {
+  position: relative;
   display: grid;
   width: 48px;
   height: 64px;
   margin: 8px;
   margin-left: 6px;
+  /* extra row added by the "340g" line — offset the arrow so it stays
+     inside the filament spool (grid rows push it down otherwise) */
+  --extra-line: 0px;
+}
+.tray.has-weight {
+  --extra-line: 12px;
 }
 .remain {
   position: relative;
@@ -167,24 +213,39 @@ const textColor = computed(() => {
   left: calc(100% - 2px);
   top: -145%;
 }
-.tray > span {
+.tray > span:not(.icon) {
   position: relative;
   top: -58px;
   font-weight: 600;
   text-align: center;
-}
-.name {
+}.name {
   font-size: 11px;
 }
 .material {
-  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 11px;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.material-weight {
+  font-size: 11px;
+  opacity: 0.85;
 }
 .icon {
+  /* pinned to the bottom of the spool, centred, so the stacked
+     name/type/weight lines can never push or overlap it */
+  position: absolute;
+  bottom: 0px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 12px;
   height: 12px;
+  margin: 0;
   mask-position: center;
   mask-repeat: no-repeat;
   mask-size: contain;
-  margin: 4px;
 }
 .icon-edit {
   mask-image: url(/src/assets/images/rename_edit.svg);
@@ -198,6 +259,9 @@ const textColor = computed(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+.tray.has-weight .arrow {
+  top: calc(-53px - var(--extra-line));
 }
 .line {
   width: 4px;

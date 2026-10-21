@@ -83,6 +83,8 @@ import hmsData from './assets/devicehms_01S.json'
 import hmsActionData from './assets/erroractions_01S.json'
 
 import IconHome from '~icons/material-symbols/home-rounded'
+import IconOverview from '~icons/material-symbols/grid-view-rounded'
+import IconCamera from '~icons/material-symbols/videocam-rounded'
 import IconTune from '~icons/material-symbols/tune-rounded'
 import IconDatabase from '~icons/material-symbols/database'
 import IconSettings from '~icons/material-symbols/settings-rounded'
@@ -102,6 +104,8 @@ type NavItem = {
 
 const navItems = computed<NavItem[]>(() => [
   { key: 'home', to: '/home', title: t('home'), icon: IconHome },
+  { key: 'overview', to: '/overview', title: t('overview'), icon: IconOverview },
+  { key: 'camera', to: '/camera', title: t('camera'), icon: IconCamera },
   { key: 'control', to: '/control', title: t('control'), icon: IconTune },
   { key: 'filament', to: '/filament', title: t('filament'), icon: IconDatabase },
   { key: 'setting', to: '/setting', title: t('settings'), icon: IconSettings },

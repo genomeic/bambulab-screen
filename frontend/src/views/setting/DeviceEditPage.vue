@@ -85,16 +85,16 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { showToast } from 'vant'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
-import { client, connectPrinter } from '../../printer'
+import { client } from '../../printer'
 import { ROUTE_NAME } from '../../router/routes'
 import {
   addDevice,
   getCurrentDevice,
   getDevices,
   removeDevice,
-  setCurrentDevice,
   type DeviceConnectionMode,
 } from '../../utils/device'
+import { removeFleetDevice, switchToDevice } from '../../stores/fleet'
 import { markDeviceListPopupRestore } from '../../utils/navigation'
 
 const { t } = useI18n()
@@ -145,8 +145,7 @@ const handleSave = () => {
     code: code.value,
   }
   addDevice(device)
-  setCurrentDevice(serial.value)
-  connectPrinter(device)
+  switchToDevice(serial.value)
   router.back()
   showToast({
     message: t('save_success'),
@@ -166,12 +165,15 @@ const handleConnectionModeSelect = (action: { name: string, value: DeviceConnect
 
 const handleDelete = () => {
   if (!serial.value) return
+  const wasCurrent = getCurrentDevice()?.serial === serial.value
   removeDevice(serial.value)
+  // drop the device from the fleet pool so it disappears from the overview
+  removeFleetDevice(serial.value)
   const current = getCurrentDevice()
   if (!current) {
     client.disconnect()
-  } else {
-    connectPrinter(current)
+  } else if (wasCurrent) {
+    switchToDevice(current.serial)
   }
   router.back()
   showToast({

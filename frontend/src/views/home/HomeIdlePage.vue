@@ -1,8 +1,8 @@
 <template>
   <div class="homepage homepage-idle">
-    <img class="printer-thumbnail" :src="p1sThumbnail" />
+    <img class="printer-thumbnail" :src="printerImage" />
     <span class="hint">{{ randomHint }}</span>
-    <div class="card files" clickable @click="showToast({ message: t('developing'), position: 'bottom' })">
+    <div class="card files" clickable @click="router.push({ name: ROUTE_NAME.HOME_FILES })">
       <img :src="fileIcon" />
       {{ t('print_files') }}
     </div>
@@ -10,8 +10,8 @@
       <div class="nozzle-temp" @click="router.push({ name: ROUTE_NAME.CONTROL_NOZZLE })">
         <img class="temp-icon" :src="nozzleOffIcon" />
         <div>
-          <span class="temp-value">{{ nozzleTemp }}</span>
-          <span class="temp-unit">°C</span>
+        <span class="temp-value">{{ nozzleTemp }}<template v-if="nozzleTarget > 0"> / {{ nozzleTarget }}</template></span>
+        <span class="temp-unit">°C</span>
         </div>
       </div>
 
@@ -51,15 +51,17 @@ import { ROUTE_NAME } from '../../router/routes'
 import { amsPrefix } from '../../utils/ams'
 import { hmsIcon, wifiSignalIcon } from '../../utils/icon'
 import { usePrinterStore } from '../../stores/printer'
+import { printerThumbnail } from '../../utils/printerArt'
 import hints from '../../assets/hints.json'
 
 import fileIcon from '../../assets/images/benchy.png'
-import p1sThumbnail from '../../assets/images/object_22.png'
 import nozzleOffIcon from '../../assets/images/monitor_nozzle_temp.svg'
 
 const { locale, t } = useI18n()
 const router = useRouter()
-const { device } = usePrinterStore()
+const { device, model } = usePrinterStore()
+
+const printerImage = computed(() => printerThumbnail(model.value))
 
 const getRandomHint = () => {
   const localeHints = hints[locale.value.startsWith('zh') ? 'zh' : 'en']
@@ -82,6 +84,7 @@ watch(
 )
 
 const nozzleTemp = computed(() => Math.floor(device.value?.nozzle_temper ?? 0))
+const nozzleTarget = computed(() => Math.floor(device.value?.nozzle_target_temper ?? 0))
 </script>
 
 <style scoped>
@@ -102,6 +105,8 @@ const nozzleTemp = computed(() => Math.floor(device.value?.nozzle_temper ?? 0))
   height: 100%;
   padding: 8px;
   padding-left: 24px;
+  border-radius: 14px;
+  object-fit: contain;
 }
 
 .homepage-idle > .hint {

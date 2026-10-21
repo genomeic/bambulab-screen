@@ -48,7 +48,7 @@
         <div class="card-label">{{ t('calibration') }}</div>
       </div>
 
-      <div class="card square-card toolbox-card" clickable @click="showToast({ message: t('developing'), position: 'bottom' })">
+      <div class="card square-card toolbox-card" clickable @click="router.push({ name: ROUTE_NAME.SETTING_TOOLBOX })">
         <i-material-symbols-handyman class="icon-large" />
         <div class="card-label">{{ t('toolbox') }}</div>
       </div>
