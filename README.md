@@ -33,11 +33,27 @@ Based on [0x5e/bambulab-p1screen](https://github.com/0x5e/bambulab-p1screen), wi
 
 ## Screenshots
 
-Base UI (inherited from upstream):
+### Printing home with the AMS strip (new)
+The AMS filament strip also shows on the printing/finished home page (upstream only had it on the idle page):
+
+<img src="./screenshot/home-printing-ams.png" alt="Printing home with AMS strip" width="45%" />
+
+### Spool remaining amount (new)
+Enter the remaining grams of any slot; trays display it right on the filament card (`ABS` / `340g` stacked), with a preset dialog and a live percentage meter:
+
+<img src="./screenshot/filament-spool.png" alt="Filament page with spool grams" width="45%" />
+<img src="./screenshot/spool-dialog.png" alt="Set remaining dialog" width="45%" />
+
+### Auto refill (new)
+Toggle the AMS auto-refill switch and see which slots are linked into a refill chain (`A3 → A4`, identical brand/type/colour/temperature):
+
+<img src="./screenshot/auto-refill.png" alt="Auto refill page" width="45%" />
+
+### Base UI (inherited from upstream)
 
 <img src="./screenshot/home-idle.png" alt="Home Idle" width="45%" />
-<img src="./screenshot/filament.png" alt="Filament" width="45%" />
 <img src="./screenshot/control.png" alt="Controls" width="45%" />
+<img src="./screenshot/heatbed.png" alt="Heatbed" width="45%" />
 <img src="./screenshot/setting.png" alt="Settings" width="45%" />
 
 ## Installation

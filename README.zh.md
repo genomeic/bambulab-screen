@@ -33,11 +33,27 @@
 
 ## 预览图
 
-基础 UI（继承自上游）：
+### 打印主页的 AMS 耗材条（新增）
+打印中/已完成的打印主页同样显示 AMS 槽位条（上游只有空闲主页才有）：
+
+<img src="./screenshot/home-printing-ams.png" alt="打印主页 AMS 条" width="45%" />
+
+### 耗材余量录入（新增）
+给任意槽位录入剩余克数，料盘上直接堆叠显示材质与克数，弹窗内含预设总量和实时百分比：
+
+<img src="./screenshot/filament-spool.png" alt="耗材页显示克数" width="45%" />
+<img src="./screenshot/spool-dialog.png" alt="设置剩余量弹窗" width="45%" />
+
+### 自动续料（新增）
+开关 AMS 自动续料，并查看哪些槽位组成了续料链（`A3 → A4`，品牌/类型/颜色/温度完全相同）：
+
+<img src="./screenshot/auto-refill.png" alt="自动续料页" width="45%" />
+
+### 基础 UI（继承自上游）
 
 <img src="./screenshot/home-idle.png" alt="主页（空闲）" width="45%" />
-<img src="./screenshot/filament.png" alt="耗材" width="45%" />
 <img src="./screenshot/control.png" alt="控制" width="45%" />
+<img src="./screenshot/heatbed.png" alt="热床" width="45%" />
 <img src="./screenshot/setting.png" alt="设置" width="45%" />
 
 ## 安装
