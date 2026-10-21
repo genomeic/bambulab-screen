@@ -1,43 +1,55 @@
-# bambulab-p1screen
+# Babum Screen
 
 [English](./README.md) | [简体中文](./README.zh.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Vue](https://img.shields.io/badge/Vue-3.5.12-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
-[![Vite](https://img.shields.io/badge/Vite-5.4.11-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
-[![GHCR](https://img.shields.io/badge/GHCR-ghcr.io%2F0x5e%2Fbambulab--p1screen-2496ED?logo=docker&logoColor=white)](https://github.com/0x5e/bambulab-p1screen/pkgs/container/bambulab-p1screen)
-[![Build](https://github.com/0x5e/bambulab-p1screen/actions/workflows/npm-build.yml/badge.svg)](https://github.com/0x5e/bambulab-p1screen/actions/workflows/npm-build.yml)
+[![Build](https://github.com/genomeic/babum-screen/actions/workflows/npm-build.yml/badge.svg)](https://github.com/genomeic/babum-screen/actions/workflows/npm-build.yml)
+[![Android Build](https://github.com/genomeic/babum-screen/actions/workflows/android-build.yml/badge.svg)](https://github.com/genomeic/babum-screen/actions/workflows/android-build.yml)
 
-Control screen software for the Bambu Lab P1 series.
+A personal, feature-extended build of **P1Screen** — the control screen software for Bambu Lab P1 series printers.
+
+Based on [0x5e/bambulab-p1screen](https://github.com/0x5e/bambulab-p1screen), with a set of features tailored to my own fleet (P1S ×2, H2D, A1, all cloud-connected).
+
+## What's different from upstream
+
+### Consumable tracking
+- **Spool remaining amount** — manually enter the remaining grams of any AMS slot or the external spool; trays show `ABS · 340g` with a stacked layout
+- **Auto-deduct after print** — when a print finishes normally, the spool that was loaded is reduced by the consumption reported by the cloud task (Bambu account required). Failed prints are never deducted, since their reported weight doesn't reflect real usage
+- Global on/off switch in Settings
+
+### Auto refill
+- New **Auto Refill** page (Filament page → wrench menu): shows the AMS auto-refill switch and visualises which slots form a refill chain (slots with identical brand / type / colour / temperatures are linked, e.g. `A3 → A4`)
+
+### Assistant (HMS)
+- **Clear errors** button — wipes the printer's HMS error list with the official `clean_print_error` command, for stale errors left behind by cancelled prints
+
+### Reliability
+- **MQTT push coalescing** — printers push status up to dozens of times per second; the UI now coalesces data pushes (250 ms) while keeping print-state transitions instant. Fixes the heavy stutter on the filament page
+- **Fleet switching fixes** — switching devices from the device popup / add / edit pages no longer drops devices from the overview
+- Memory-cached spool bookkeeping (no localStorage parsing per render)
+
+### Print gate
+- Cloud-connected P1/P1S with firmware > 01.08 refuses unsigned print commands. The app detects this up front and shows a guide dialog instead of a silent failure (historic reprints, skip-objects, etc.)
 
 ## Screenshots
-<img src="./screenshot/home-idle.png" alt="Home Idle" width="50%" />
-<img src="./screenshot/home.png" alt="Home" width="50%" />
-<img src="./screenshot/home-warning.png" alt="Home Warning" width="50%" />
-<img src="./screenshot/control.png" alt="Controls" width="50%" />
-<img src="./screenshot/printspeed.png" alt="PrintSpeed" width="50%" />
-<img src="./screenshot/motion.png" alt="Motion" width="50%" />
-<img src="./screenshot/nozzle.png" alt="Nozzle" width="50%" />
-<img src="./screenshot/heatbed.png" alt="Heatbed" width="50%" />
-<img src="./screenshot/filament.png" alt="Filament" width="50%" />
-<img src="./screenshot/filament-edit.png" alt="FilamentEdit" width="50%" />
-<img src="./screenshot/setting.png" alt="Settings" width="50%" />
-<img src="./screenshot/message.png" alt="Message" width="50%" />
 
-## System Requirements
-- Resolution: >= 568x320 (iPhone 5 screen size)
-- Browser/System version: Chrome >= 57，iOS >= 10.3
-- Local control: P1S firmware version <= 01.08.01.00, or enable "LAN Only" and "Developer Mode"
+Base UI (inherited from upstream):
 
-## Usage
-### Android App
-[Download Link](https://github.com/0x5e/bambulab-p1screen/releases)
+<img src="./screenshot/home-idle.png" alt="Home Idle" width="45%" />
+<img src="./screenshot/filament.png" alt="Filament" width="45%" />
+<img src="./screenshot/control.png" alt="Controls" width="45%" />
+<img src="./screenshot/setting.png" alt="Settings" width="45%" />
+
+## Installation
+
+### Android app (recommended)
+
+Grab the APK from the **Actions** tab → latest *Android Build* run → Artifacts.
+You can also build it yourself (see [Building](#building)).
 
 ### Web
-#### 1. Deploy backend service
-Deploy the backend service on any device in the same LAN as the printer (mainly MQTT forwarding):
 
-##### Option 1: npm
+Deploy the backend service on any device in the same LAN as the printer (mainly MQTT forwarding):
 
 ```bash
 npm install
@@ -45,45 +57,35 @@ npm run build
 npm run start
 ```
 
-##### Option 2: Docker
-```bash
-docker run -d ghcr.io/0x5e/bambulab-p1screen:latest
-```
+Then add a full-screen home screen shortcut pointing at `http://<server-address>:8888/`.
 
-##### Option 3: Docker Compose
-Use the provided [docker-compose.yml](./docker-compose.yml):
+## Building
 
 ```bash
-docker compose up -d
+# frontend
+cd frontend
+npm install
+npm run build
+
+# android (output: android/app/build/outputs/apk/debug/app-debug.apk)
+cd ../android
+./gradlew assembleDebug
 ```
 
-#### 2. Add a home screen shortcut on mobile
-Access URL:
+Or push to `main` and let GitHub Actions build the APK in the cloud
+(`Android Build` workflow, also manually dispatchable).
 
-`http://<server-address>:<port>/`
+## Known limitations
 
-Default port: `8888`
+- Firmware > 01.08 on cloud-connected P1/P1P/P1S **signs** MQTT commands; unsigned third-party commands are rejected with `err_code 84033543`. Affected: starting/reprinting prints, skip-objects, some AMS setting switches. The app detects and guides around the most common ones; the rest must be done on the printer screen or via Bambu Handy.
+- Auto-deduct requires a logged-in Bambu account (cloud task weight).
 
-- iOS: Safari -> Share -> Add to Home Screen -> enable “Open as Web App”
-- Android: You can use [web-to-app](https://github.com/shiahonb777/web-to-app/) to create a full-screen home shortcut
+## Acknowledgements
 
-Any full-screen web launch method is acceptable. More ideas are welcome.
+- [0x5e/bambulab-p1screen](https://github.com/0x5e/bambulab-p1screen) — the base project. Almost all of the core UI/UX is upstream's work.
+- [OpenBambuAPI](https://github.com/Doridian/OpenBambuAPI/) — LAN protocol docs
+- [Bambu Lab](https://bambulab.com) for the printers (and for keeping the MQTT protocol open enough to build on)
 
-## Hardware
-- [P1S Screen Mod - Redmi 2 Direct Power Version](https://makerworld.com.cn/zh/models/2134336)
-- [P1S Screen Mod - iPhone 7/Plus Version](https://makerworld.com.cn/zh/models/1945893)
+## License
 
-## TODOs
-- Homepage
-  - File list
-- Other
-  - Global Dialog(Print Success / Failure / Warning)
-  - AMS 2 / AMS HT support
-
-## References
-- [P1 Screen Operation Guide](https://wiki.bambulab.com/en/p1/manual/screen-operation)
-- [P2S Screen Operation Guide](https://wiki.bambulab.com/en/p2s/manual/screen-operation)
-- [LAN Control Protocol Docs (OpenBambuAPI)](https://github.com/Doridian/OpenBambuAPI/)
-- [LAN Control Protocol Implementation (bambulabs_api)](https://github.com/BambuTools/bambulabs_api)
-- [Print State Constants (ha-bambulab)](https://github.com/greghesp/ha-bambulab/blob/main/custom_components/bambu_lab/pybambu/const.py)
-- [bambu-printer-manager > docs](https://github.com/synman/bambu-printer-manager/tree/main/docs)
+[MIT](./LICENSE)

@@ -1,43 +1,55 @@
-# bambulab-p1screen
+# Babum Screen
 
 [English](./README.md) | [简体中文](./README.zh.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Vue](https://img.shields.io/badge/Vue-3.5.12-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
-[![Vite](https://img.shields.io/badge/Vite-5.4.11-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
-[![GHCR](https://img.shields.io/badge/GHCR-ghcr.io%2F0x5e%2Fbambulab--p1screen-2496ED?logo=docker&logoColor=white)](https://github.com/0x5e/bambulab-p1screen/pkgs/container/bambulab-p1screen)
-[![Build](https://github.com/0x5e/bambulab-p1screen/actions/workflows/npm-build.yml/badge.svg)](https://github.com/0x5e/bambulab-p1screen/actions/workflows/npm-build.yml)
+[![Build](https://github.com/genomeic/babum-screen/actions/workflows/npm-build.yml/badge.svg)](https://github.com/genomeic/babum-screen/actions/workflows/npm-build.yml)
+[![Android Build](https://github.com/genomeic/babum-screen/actions/workflows/android-build.yml/badge.svg)](https://github.com/genomeic/babum-screen/actions/workflows/android-build.yml)
 
-拓竹 P1 系列控制屏软件。
+拓竹 P1 系列控制屏软件 **P1Screen** 的个人深度定制版。
+
+基于 [0x5e/bambulab-p1screen](https://github.com/0x5e/bambulab-p1screen) 开发，针对我自己的打印机车队（P1S ×2、H2D、A1，全部云连接）增加了一系列功能。
+
+## 与上游的差异
+
+### 耗材余量管理
+- **手动录入余量** — 给任意 AMS 槽位或外挂料盘录入剩余克数，料盘上直接显示「ABS · 340g」（材质与克数上下两行）
+- **打印后自动扣减** — 打印正常完成后，按云端任务记录的耗料量自动减少对应料盘的剩余量（需登录拓竹账号）。**打印失败的任务不会扣减**——失败任务的重量数据不代表真实用量
+- 设置页有全局开关
+
+### 自动续料
+- 新增**自动续料**页（耗材页 → 右下角扳手菜单）：提供 AMS 自动续料开关，并可视化续料链——品牌、类型、颜色、温度完全相同的槽位自动链接（如 `A3 → A4`）
+
+### 助手（HMS 报错）
+- **清空报错**按钮 — 通过官方 `clean_print_error` 指令清空打印机的报错列表，用于清理取消打印后残留的过期报错
+
+### 稳定性
+- **MQTT 推送合并** — 打印机状态推送可达每秒几十次，UI 现在将纯数据推送按 250ms 合并渲染（打印状态变化仍然实时响应），解决了耗材页严重卡顿的问题
+- **车队切换修复** — 从设备弹窗/添加/编辑页切换设备不再导致总览页丢设备
+- 料盘数据内存缓存，避免每次渲染同步解析 localStorage
+
+### 打印拦截（printGate）
+- 云连接的 P1/P1S 固件 01.08 以上会拒绝未签名的打印指令。App 会提前检测并弹窗引导，而不是默默失败（历史任务重印、跳过对象等场景）
 
 ## 预览图
-<img src="./screenshot/home-idle.png" alt="主页（空闲）" width="50%" />
-<img src="./screenshot/home.png" alt="主页" width="50%" />
-<img src="./screenshot/home-warning.png" alt="主页（警告）" width="50%" />
-<img src="./screenshot/control.png" alt="控制页" width="50%" />
-<img src="./screenshot/printspeed.png" alt="打印速度" width="50%" />
-<img src="./screenshot/motion.png" alt="运动" width="50%" />
-<img src="./screenshot/nozzle.png" alt="喷嘴和挤出机" width="50%" />
-<img src="./screenshot/heatbed.png" alt="热床" width="50%" />
-<img src="./screenshot/filament.png" alt="耗材页" width="50%" />
-<img src="./screenshot/filament-edit.png" alt="耗材编辑页" width="50%" />
-<img src="./screenshot/setting.png" alt="设置页" width="50%" />
-<img src="./screenshot/message.png" alt="消息页" width="50%" />
 
-## 系统要求
-- 分辨率：>= 568x320（iPhone 5 尺寸）
-- 浏览器/系统版本：Chrome >= 57，iOS >= 10.3
-- 局域网控制：P1S固件版本 <= 01.08.01.00，或开启“仅局域网”和“开发者模式”开关
+基础 UI（继承自上游）：
 
-## 使用步骤
-### Android 版
-[下载地址](https://github.com/0x5e/bambulab-p1screen/releases)
+<img src="./screenshot/home-idle.png" alt="主页（空闲）" width="45%" />
+<img src="./screenshot/filament.png" alt="耗材" width="45%" />
+<img src="./screenshot/control.png" alt="控制" width="45%" />
+<img src="./screenshot/setting.png" alt="设置" width="45%" />
 
-### Web 版
-#### 1. 部署后端服务
-在打印机局域网内任意设备部署（主要负责 MQTT 转发）：
+## 安装
 
-##### 方式 1：npm
+### 安卓 App（推荐）
+
+到仓库的 **Actions** 页 → 最新一次 *Android Build* 运行 → Artifacts 下载 APK。
+也可以自己构建（见下方[构建](#构建)）。
+
+### 网页版
+
+在与打印机同一局域网的设备上部署后端服务（主要是 MQTT 转发）：
 
 ```bash
 npm install
@@ -45,46 +57,35 @@ npm run build
 npm run start
 ```
 
-##### 方式 2：Docker
+然后在手机浏览器打开 `http://<服务器地址>:8888/`，添加全屏主屏快捷方式即可。
+
+## 构建
 
 ```bash
-docker run -d ghcr.io/0x5e/bambulab-p1screen:latest
+# 前端
+cd frontend
+npm install
+npm run build
+
+# 安卓（产物：android/app/build/outputs/apk/debug/app-debug.apk）
+cd ../android
+./gradlew assembleDebug
 ```
 
-##### 方式 3：Docker Compose
-使用仓库内的 [docker-compose.yml](./docker-compose.yml)：
+也可以直接推送到 `main`，让 GitHub Actions 在云端打包 APK
+（`Android Build` 工作流，支持手动触发）。
 
-```bash
-docker compose up -d
-```
+## 已知限制
 
-#### 2. 移动端添加浏览器桌面书签
-访问地址：
+- 云连接的 P1/P1P/P1S 固件 01.08 以上会对 MQTT 指令做**签名校验**，未签名的第三方指令会被拒绝（`err_code 84033543`）。受影响场景：开始/重印打印、跳过对象、部分 AMS 设置开关。App 已对常见场景做了检测和引导，其余需在打印机屏幕或 Bambu Handy 上操作。
+- 自动扣减需要登录拓竹账号（拉取云端任务的耗料数据）。
 
-`http://后端服务地址:端口/`
+## 致谢
 
-默认端口：`8888`
+- [0x5e/bambulab-p1screen](https://github.com/0x5e/bambulab-p1screen) — 基础项目，绝大部分核心 UI/UX 都是上游的作品
+- [OpenBambuAPI](https://github.com/Doridian/OpenBambuAPI/) — 局域网协议文档
+- [Bambu Lab](https://bambulab.com) — 打印机本身，以及足够开放的 MQTT 协议
 
-- iOS：Safari -> 共享 -> 添加到主屏幕 -> 选中“作为网页 App 打开”
-- Android：可使用 [web-to-app](https://github.com/shiahonb777/web-to-app/) 添加桌面快捷方式（选择全屏启动）
+## 许可证
 
-只要有办法让网页全屏运行即可，其他方案欢迎共同探索。
-
-## 硬件部分
-- [P1S 屏幕改装 - 红米2直供电版](https://makerworld.com.cn/zh/models/2134336)
-- [P1S 屏幕改装 - iPhone7/Plus版](https://makerworld.com.cn/zh/models/1945893)
-
-## TODOs
-- 首页
-  - 文件列表
-- 其他
-  - 全局弹窗（打印成功 / 失败 / 警告）
-  - AMS 2 / AMS HT 适配
-
-## 参考内容
-- [P1 系列屏幕操作指南](https://wiki.bambulab.com/en/p1/manual/screen-operation)
-- [P2S 屏幕操作指南](https://wiki.bambulab.com/en/p2s/manual/screen-operation)
-- [局域网控制协议文档（OpenBambuAPI）](https://github.com/Doridian/OpenBambuAPI/)
-- [局域网控制协议实现（bambulabs_api）](https://github.com/BambuTools/bambulabs_api)
-- [打印状态码参考（ha-bambulab）](https://github.com/greghesp/ha-bambulab/blob/main/custom_components/bambu_lab/pybambu/const.py)
-- [bambu-printer-manager > docs](https://github.com/synman/bambu-printer-manager/tree/main/docs)
+[MIT](./LICENSE)
