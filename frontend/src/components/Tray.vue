@@ -38,7 +38,6 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { DeviceTray } from '@bambulab-p1screen/printer-api'
 import { type PopoverAction } from 'vant'
-import { client } from '../printer'
 import { getManualRemainPercent, getManualSpool, getSpoolSerial, spoolStoreVersion } from '../utils/spoolStore'
 
 const { t } = useI18n()

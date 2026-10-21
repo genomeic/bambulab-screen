@@ -134,8 +134,6 @@ export const setAutoDeductEnabled = (enabled: boolean) => {
   }
 }
 
-type LastDeduct = { [serial: string]: string }
-
 const getLastDeductedTaskId = (serial: string): string => {
   try {
     const parsed = JSON.parse(localStorage.getItem(LAST_DEDUCT_KEY) ?? '{}')

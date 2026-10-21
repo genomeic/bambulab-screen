@@ -77,7 +77,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { type DeviceTray } from '@bambulab-p1screen/printer-api'
-import { PopoverAction, showToast } from 'vant'
+import { PopoverAction } from 'vant'
 import { useRouter } from 'vue-router'
 import { client } from '../../printer'
 import { ROUTE_NAME } from '../../router/routes'
