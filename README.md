@@ -1,10 +1,10 @@
-# Babum Screen
+# Bambulab Screen
 
 [English](./README.md) | [简体中文](./README.zh.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Build](https://github.com/genomeic/babum-screen/actions/workflows/npm-build.yml/badge.svg)](https://github.com/genomeic/babum-screen/actions/workflows/npm-build.yml)
-[![Android Build](https://github.com/genomeic/babum-screen/actions/workflows/android-build.yml/badge.svg)](https://github.com/genomeic/babum-screen/actions/workflows/android-build.yml)
+[![Build](https://github.com/genomeic/bambulab-screen/actions/workflows/npm-build.yml/badge.svg)](https://github.com/genomeic/bambulab-screen/actions/workflows/npm-build.yml)
+[![Android Build](https://github.com/genomeic/bambulab-screen/actions/workflows/android-build.yml/badge.svg)](https://github.com/genomeic/bambulab-screen/actions/workflows/android-build.yml)
 
 A personal, feature-extended build of **P1Screen** — the control screen software for Bambu Lab P1 series printers.
 
