@@ -20,6 +20,18 @@
 
       <van-cell-group inset>
         <van-cell
+          :title="t('print_timelapse')"
+          :label="t('print_timelapse_desc')"
+          center
+        >
+          <template #right-icon>
+            <van-switch v-model="timelapseDefault" @change="onTimelapseDefaultChange" size="24px" />
+          </template>
+        </van-cell>
+      </van-cell-group>
+
+      <van-cell-group inset>
+        <van-cell
           :title="t('language')"
           :value="languageLabel"
           is-link
@@ -105,6 +117,12 @@ const forceLandscape = ref(false)
 const keepScreenOn = ref(false)
 const screenOffTimeout = ref(0)
 const autoDeduct = ref(isAutoDeductEnabled())
+const timelapseDefault = ref(localStorage.getItem('print_timelapse_default') === '1')
+const onTimelapseDefaultChange = (value: boolean) => {
+  localStorage.setItem('print_timelapse_default', value ? '1' : '0')
+  showToast(t('success'))
+}
+
 const onAutoDeductChange = (value: boolean) => setAutoDeductEnabled(value)
 const showLanguageSheet = ref(false)
 const showScreenOffSheet = ref(false)

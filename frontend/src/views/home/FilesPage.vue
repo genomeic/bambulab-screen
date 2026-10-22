@@ -72,6 +72,39 @@
         </template>
         <van-empty v-else :description="t('files_local_lan_hint')" />
       </van-tab>
+
+      <van-tab :title="t('files_timelapse')">
+        <template v-if="localSupported">
+          <van-pull-refresh :model-value="tlRefreshing" @update:model-value="onTlRefresh">
+            <van-list
+              v-model:loading="tlLoading"
+              :finished="tlFinished"
+              :finished-text="timelapseFiles.length ? t('files_no_more') : ''"
+              @load="loadTimelapseFiles"
+            >
+              <van-cell-group inset class="local-group">
+                <van-cell
+                  v-for="file in timelapseFiles"
+                  :key="file.path"
+                  :title="file.name"
+                  :label="file.label"
+                  center
+                  is-link
+                  :disabled="tlDownloading"
+                  @click="onTimelapseClick(file)"
+                />
+              </van-cell-group>
+              <van-empty v-if="tlFinished && !timelapseFiles.length">
+                <template #description>
+                  <div>{{ t('files_timelapse_empty') }}</div>
+                  <div class="tl-empty-desc">{{ t('files_timelapse_empty_desc') }}</div>
+                </template>
+              </van-empty>
+            </van-list>
+          </van-pull-refresh>
+        </template>
+        <van-empty v-else :description="t('files_local_lan_hint')" />
+      </van-tab>
     </van-tabs>
   </BasePage>
 </template>
@@ -124,6 +157,14 @@ const localFiles = ref<{ name: string; path: string; label: string }[]>([])
 const localLoading = ref(false)
 const localFinished = ref(false)
 const localRefreshing = ref(false)
+
+const timelapseFiles = ref<{ name: string; path: string; label: string }[]>([])
+const tlLoading = ref(false)
+const tlFinished = ref(false)
+const tlRefreshing = ref(false)
+const tlDownloading = ref(false)
+
+const timelapseDefault = () => localStorage.getItem('print_timelapse_default') === '1'
 
 const currentSerial = computed(() => client.connectOptions?.serial ?? '')
 
@@ -271,6 +312,7 @@ const onTaskClick = (task: CloudTask) => {
         markReprintAttempt()
         await client.startProject({
           param: `Metadata/plate_${task.plateIndex || 1}.gcode`,
+          timelapse: timelapseDefault(),
           profileId: task.profileId,
           taskId: task.id,
           subtaskId: task.instanceId,
@@ -322,6 +364,92 @@ const loadLocalFiles = async () => {
   }
 }
 
+const loadTimelapseFiles = async () => {
+  if (tlFinished.value) return
+  const dev = getCurrentDevice()
+  if (!dev) {
+    tlFinished.value = true
+    tlLoading.value = false
+    return
+  }
+  const ftp = new FTPSClient()
+  try {
+    await ftp.connect(createFtpUrl(dev.ip))
+    await ftp.login('bblp', dev.code)
+    const entries: FTPFileInfo[] = await ftp.list('/timelapse/')
+    timelapseFiles.value = entries
+      .filter(item => !item.isDirectory)
+      .filter(item => /\.(mp4|avi|mov)$/i.test(item.name))
+      .sort((a, b) => (b.rawModifiedAt ?? '').localeCompare(a.rawModifiedAt ?? ''))
+      .map(item => ({
+        name: item.name,
+        path: `/timelapse/${item.name}`,
+        label: `${(item.size / 1024 / 1024).toFixed(1)} MB · ${item.rawModifiedAt ?? ''}`,
+      }))
+    tlFinished.value = true
+  } catch (err: any) {
+    // 550 = no timelapse directory: nothing has ever been recorded
+    tlFinished.value = true
+    if (err?.code !== 550) showToast(err?.message ?? 'error')
+  } finally {
+    ftp.close()
+    tlLoading.value = false
+    tlRefreshing.value = false
+  }
+}
+
+const onTlRefresh = (value: boolean) => {
+  tlRefreshing.value = value
+  timelapseFiles.value = []
+  tlFinished.value = false
+  tlLoading.value = true
+  loadTimelapseFiles()
+}
+
+const toBase64 = (data: Uint8Array) => {
+  let binary = ''
+  const chunk = 0x8000
+  for (let i = 0; i < data.length; i += chunk) {
+    binary += String.fromCharCode(...data.subarray(i, i + chunk))
+  }
+  return btoa(binary)
+}
+
+const onTimelapseClick = (file: { name: string; path: string }) => {
+  if (tlDownloading.value) return
+  showConfirmDialog({
+    title: t('files_timelapse_download'),
+    message: file.name,
+    confirmButtonText: t('confirm'),
+    cancelButtonText: t('cancel'),
+  })
+    .then(async () => {
+      tlDownloading.value = true
+      showToast(t('files_timelapse_downloading'))
+      const dev = getCurrentDevice()
+      if (!dev) return
+      const ftp = new FTPSClient()
+      try {
+        await ftp.connect(createFtpUrl(dev.ip))
+        await ftp.login('bblp', dev.code)
+        const data = await ftp.downloadContent(file.path)
+        const bridge = (window as any).P1ScreenBridge
+        if (!bridge?.saveDownloadedFile) throw new Error('native bridge unavailable')
+        const result = bridge.saveDownloadedFile(toBase64(data), file.name)
+        if (typeof result === 'string' && result.startsWith('error:')) {
+          throw new Error(result.slice(6))
+        }
+        showToast(t('files_timelapse_saved', { path: result }))
+      } catch (err: any) {
+        showToast(t('failed', { message: err?.message ?? '' }))
+      } finally {
+        ftp.close()
+        tlDownloading.value = false
+      }
+    })
+    .catch(() => {})
+}
+
 const onLocalRefresh = (value: boolean) => {
   localRefreshing.value = value
   localFiles.value = []
@@ -350,6 +478,7 @@ const onLocalFileClick = (file: { name: string; path: string }) => {
         await client.startProject({
           param: file.path,
           url: `ftp://${file.path}`,
+          timelapse: timelapseDefault(),
         })
         showToast(t('files_reprint_sent'))
       } catch (err: any) {
@@ -467,5 +596,11 @@ const statusType = (status: number): 'success' | 'primary' | 'danger' => {
 
 .local-group {
   margin-top: 8px;
+}
+
+.tl-empty-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.7;
 }
 </style>

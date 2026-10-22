@@ -367,6 +367,46 @@ public final class MainActivity extends Activity {
     public String getCameraStatus(String serial) {
       return CameraStreamManager.getInstance().getStatus(serial);
     }
+
+    /**
+     * Saves a file (base64-encoded, fetched via the FTP tunnel) into the
+     * public Downloads collection. Returns its display location or
+     * "error:..."; the reason is a substring of a comment in Java, not HTML.
+     */
+    @JavascriptInterface
+    public String saveDownloadedFile(String base64, String filename) {
+      try {
+        byte[] data = android.util.Base64.decode(base64, android.util.Base64.DEFAULT);
+        String safeName = filename == null || filename.length() == 0
+            ? "download.bin" : filename.replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+          android.content.ContentValues values = new android.content.ContentValues();
+          values.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safeName);
+          values.put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/octet-stream");
+          android.net.Uri uri = getContentResolver().insert(
+              android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+          if (uri == null) throw new IOException("MediaStore insert failed");
+          java.io.OutputStream os = getContentResolver().openOutputStream(uri);
+          if (os == null) throw new IOException("output stream unavailable");
+          try {
+            os.write(data);
+          } finally {
+            os.close();
+          }
+          return "Downloads/" + safeName;
+        }
+        java.io.File out = new java.io.File(getExternalFilesDir(null), safeName);
+        java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+        try {
+          fos.write(data);
+        } finally {
+          fos.close();
+        }
+        return out.getAbsolutePath();
+      } catch (Exception e) {
+        return "error:" + e.getMessage();
+      }
+    }
   }
 
   private String getDeviceInfoJsonFromWebView() throws IOException {

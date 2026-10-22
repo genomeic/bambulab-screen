@@ -490,12 +490,14 @@ export class PrinterClient {
     subtaskId?: string | number
     useAms?: boolean
     bedType?: string
+    /** record a timelapse of this print (firmware >= 01.08, SD card required) */
+    timelapse?: boolean
   }) {
     await this.request('print.project_file', {
       'param': task.param ?? '',
       'url': task.url ?? '',
       'bed_type': task.bedType ?? 'auto',
-      'timelapse': false,
+      'timelapse': task.timelapse ?? false,
       'bed_leveling': true,
       'flow_cali': true,
       'vibration_cali': true,
