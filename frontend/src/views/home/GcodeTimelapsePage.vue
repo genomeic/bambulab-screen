@@ -124,6 +124,35 @@ let anchorTime = 0
 /** P1-series bed size in mm. */
 const BED = 256
 
+/**
+ * Frames the model: places the camera along `dir` at the distance where the
+ * bounding box's projected extents fit the viewport. The extents use the
+ * box support function, so the framing is exact for any orbit angle — a
+ * wide, flat print and a tall tower both fill the frame without clipping.
+ */
+const fitCamera = (
+  p: WebGLPreview,
+  dir: THREE.Vector3,
+  hx: number,
+  hy: number,
+  hz: number,
+): void => {
+  const fov = (p.camera.fov * Math.PI) / 180
+  const aspect = Math.max(p.camera.aspect, 0.1)
+  const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), dir).normalize()
+  const up = new THREE.Vector3().crossVectors(dir, right).normalize()
+  const extX = Math.abs(right.x) * hx + Math.abs(right.y) * hy + Math.abs(right.z) * hz
+  const extY = Math.abs(up.x) * hx + Math.abs(up.y) * hy + Math.abs(up.z) * hz
+  const dist = Math.max(extY / Math.tan(fov / 2), extX / (Math.tan(fov / 2) * aspect), 30) * 1.1
+  p.camera.position.copy(p.controls.target).addScaledVector(dir, dist)
+  p.camera.updateProjectionMatrix()
+  p.controls.minDistance = 5
+  p.controls.maxDistance = dist * 3
+  // Keep the orbit above ~30° elevation so the print never leaves the frame.
+  p.controls.maxPolarAngle = Math.PI / 3
+  p.controls.update()
+}
+
 /** Lines fed to the parser per UI slice — keeps the thread responsive. */
 const PARSE_CHUNK_LINES = 20000
 /** Layers built per UI slice while the scene is assembled. */
@@ -257,27 +286,33 @@ const buildPreview = async (text: string): Promise<void> => {
     throw new Error('no printable layers found')
   }
 
+  // Depth shading: deeper layers catch less chamber light. Looking down at
+  // sparse infill you can see ~10 layers through the gaps, which otherwise
+  // accumulates into a solid-looking mesh — the falloff is what makes the
+  // top layer's separate lines read clearly, like a real print-cam frame.
+  const top = layerGroups.length - 1
+  for (let i = 0; i < layerGroups.length; i++) {
+    const shade = Math.max(0.6, 1 - (top - i) * 0.006)
+    if (shade >= 1) continue
+    layerGroups[i].traverse(obj => {
+      const mat = (obj as THREE.Mesh).material as { color?: THREE.Color } | undefined
+      if (mat?.color) mat.color.multiplyScalar(shade)
+    })
+  }
+
   // Camera fit. The group is rotated -90° about X and offset to the bed
   // centre, so gcode (x, y, z) maps to world (x - BED/2, z, BED/2 - y).
-  const cx = (minX + maxX) / 2
-  const cy = (minY + maxY) / 2
-  const cz = (minZ + maxZ) / 2
-  const radius = Math.max(maxX - minX, maxY - minY, (maxZ - minZ) * 1.35) / 2 + 4
-  const fovRad = (p.camera.fov * Math.PI) / 180
-  const dist = (radius / Math.sin(fovRad / 2)) * 1.12
-  p.controls.target.set(cx - BED / 2, cz, BED / 2 - cy)
-  // Three-quarter view from front-right-above, like a chamber camera.
-  const dx = 0.72
-  const dy = 0.66
-  const dz = 1
-  const dl = Math.hypot(dx, dy, dz)
-  p.camera.position.set(
-    p.controls.target.x + (dx / dl) * dist,
-    p.controls.target.y + (dy / dl) * dist,
-    p.controls.target.z + (dz / dl) * dist,
+  p.controls.target.set(
+    (minX + maxX) / 2 - BED / 2,
+    (minZ + maxZ) / 2,
+    BED / 2 - (minY + maxY) / 2,
   )
-  p.camera.updateProjectionMatrix()
-  p.controls.update()
+  // Downward oblique view — steep enough to read the whole top surface,
+  // still angled so the walls and layer steps stay visible, like a chamber
+  // camera looking into the bed. Half-extents in world axes: gcode x/y/z
+  // map to world x/z/y.
+  const dir = new THREE.Vector3(0.4, 0.82, 0.42).normalize()
+  fitCamera(p, dir, (maxX - minX) / 2, (maxZ - minZ) / 2, (maxY - minY) / 2)
   p.renderer.render(p.scene, p.camera)
 
   preview = p
