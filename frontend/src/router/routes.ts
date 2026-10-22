@@ -3,6 +3,7 @@ import HomePage from '../views/home/HomePage.vue'
 import OverviewPage from '../views/overview/OverviewPage.vue'
 import CameraPage from '../views/camera/CameraPage.vue'
 import FilesPage from '../views/home/FilesPage.vue'
+import GcodeTimelapsePage from '../views/home/GcodeTimelapsePage.vue'
 import ControlPage from '../views/control/ControlPage.vue'
 import MotionPage from '../views/control/MotionPage.vue'
 import NozzlePage from '../views/control/NozzlePage.vue'
@@ -26,6 +27,7 @@ export const ROUTE_NAME = {
   OVERVIEW: 'overview',
   CAMERA: 'camera',
   HOME_FILES: 'home-files',
+  GCODE_TIMELAPSE: 'gcode-timelapse',
   CONTROL: 'control',
   CONTROL_MOTION: 'control-motion',
   CONTROL_NOZZLE: 'control-nozzle',
@@ -51,6 +53,7 @@ export const routes: RouteRecordRaw[] = [
   { path: '/camera', name: ROUTE_NAME.CAMERA, component: CameraPage },
   { path: '/home', name: ROUTE_NAME.HOME, component: HomePage },
   { path: '/home/files', name: ROUTE_NAME.HOME_FILES, component: FilesPage },
+  { path: '/home/timelapse', name: ROUTE_NAME.GCODE_TIMELAPSE, component: GcodeTimelapsePage },
   { path: '/control', name: ROUTE_NAME.CONTROL, component: ControlPage },
   { path: '/control/motion', name: ROUTE_NAME.CONTROL_MOTION, component: MotionPage },
   { path: '/control/nozzle', name: ROUTE_NAME.CONTROL_NOZZLE, component: NozzlePage },

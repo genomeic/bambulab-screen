@@ -23,6 +23,11 @@ Based on [0x5e/bambulab-p1screen](https://github.com/0x5e/bambulab-p1screen), wi
 ### Assistant (HMS)
 - **Clear errors** button — wipes the printer's HMS error list with the official `clean_print_error` command, for stale errors left behind by cancelled prints
 
+### Virtual timelapse (new)
+- Replays a model's print process from its G-code as a layer-by-layer animation — no camera, no waiting for a real print
+- Pick a `.3mf` / `.gcode` file in the file list → "Generate timelapse"; playback colours walls / infill / support separately in an isometric view
+- **Export video** (8/15/30 s) as `.webm` to the phone's Downloads folder, ready to share
+
 ### Reliability
 - **MQTT push coalescing** — printers push status up to dozens of times per second; the UI now coalesces data pushes (250 ms) while keeping print-state transitions instant. Fixes the heavy stutter on the filament page
 - **Fleet switching fixes** — switching devices from the device popup / add / edit pages no longer drops devices from the overview
@@ -48,6 +53,11 @@ Enter the remaining grams of any slot; trays display it right on the filament ca
 Toggle the AMS auto-refill switch and see which slots are linked into a refill chain (`A3 → A4`, identical brand/type/colour/temperature):
 
 <img src="./screenshot/auto-refill.png" alt="Auto refill page" width="45%" />
+
+### Virtual timelapse (new)
+Rebuild the print process from a model's G-code and replay it layer by layer — exportable as video:
+
+<img src="./screenshot/tl-gen-preview.png" alt="Virtual timelapse" width="60%" />
 
 ### Base UI (inherited from upstream)
 

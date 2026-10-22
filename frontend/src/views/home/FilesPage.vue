@@ -106,6 +106,13 @@
         <van-empty v-else :description="t('files_local_lan_hint')" />
       </van-tab>
     </van-tabs>
+    <van-action-sheet
+      v-model:show="actionSheetShow"
+      :actions="actionSheetActions"
+      :cancel-text="t('cancel')"
+      close-on-click-action
+      @select="onActionSelect"
+    />
   </BasePage>
 </template>
 
@@ -120,10 +127,13 @@ import { getCloudUser } from '../../utils/user'
 import { getCurrentDevice } from '../../utils/device'
 import { isCloudPrintBlocked } from '../../utils/printGate'
 import { usePrinterStore } from '../../stores/printer'
+import { useRouter } from 'vue-router'
+import { ROUTE_NAME } from '../../router/routes'
 import BasePage from '../../components/BasePage.vue'
 
 const { t } = useI18n()
 const { device, modules } = usePrinterStore()
+const router = useRouter()
 
 type CloudTask = {
   id: number
@@ -146,6 +156,12 @@ type CloudTask = {
 
 const activeTab = ref(0)
 const tasks = ref<CloudTask[]>([])
+const actionFile = ref<{ name: string; path: string } | null>(null)
+const actionSheetShow = ref(false)
+const actionSheetActions = computed(() => [
+  { name: t('tl_gen_action_print') },
+  { name: t('tl_gen_action') },
+])
 const listLoading = ref(false)
 const finished = ref(false)
 const refreshing = ref(false)
@@ -459,10 +475,30 @@ const onLocalRefresh = (value: boolean) => {
 }
 
 const onLocalFileClick = (file: { name: string; path: string }) => {
+  if (!/\.(3mf|gcode)$/i.test(file.name)) return
   if (isCloudPrintBlocked(modules.value)) {
     showReprintBlockedDialog()
     return
   }
+  actionFile.value = file
+  actionSheetShow.value = true
+}
+
+const onActionSelect = (action: { name: string }) => {
+  const file = actionFile.value
+  actionSheetShow.value = false
+  if (!file) return
+  if (action.name === t('tl_gen_action_print')) {
+    confirmPrint(file)
+  } else {
+    router.push({
+      name: ROUTE_NAME.GCODE_TIMELAPSE,
+      query: { path: file.path, name: file.name },
+    })
+  }
+}
+
+const confirmPrint = (file: { name: string; path: string }) => {
   showConfirmDialog({
     title: t('files_print_local'),
     message: isPrinting.value
