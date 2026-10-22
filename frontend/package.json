@@ -6,9 +6,11 @@
     "@bambulab-p1screen/printer-api": "*",
     "colord": "^2.9.3",
     "fflate": "^0.8.2",
+    "gcode-preview": "^2.18.0",
     "humanize-duration": "^3.33.2",
     "qrcode": "^1.5.4",
     "semver": "^7.7.4",
+    "three": "^0.159.0",
     "vant": "^4.9.13",
     "vue": "^3.5.12",
     "vue-i18n": "^11.4.2",
@@ -20,6 +22,7 @@
     "ios >= 10.3"
   ],
   "devDependencies": {
-    "@types/qrcode": "^1.5.6"
+    "@types/qrcode": "^1.5.6",
+    "@types/three": "^0.159.0"
   }
 }

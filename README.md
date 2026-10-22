@@ -25,7 +25,7 @@ Based on [0x5e/bambulab-p1screen](https://github.com/0x5e/bambulab-p1screen), wi
 
 ### Virtual timelapse (new)
 - Replays a model's print process from its G-code as a layer-by-layer animation — no camera, no waiting for a real print
-- Pick a `.3mf` / `.gcode` file in the file list → "Generate timelapse"; playback colours walls / infill / support separately in an isometric view
+- Pick a `.3mf` / `.gcode` file in the file list → "Generate timelapse"; the print is rebuilt with real extrusion-width tube geometry (Bambu Studio compatible) in the active filament's colour, in an orbitable three-quarter chamber view
 - **Export video** (8/15/30 s) as `.webm` to the phone's Downloads folder, ready to share
 
 ### Reliability

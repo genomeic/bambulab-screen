@@ -15,7 +15,7 @@
 
       <div class="tl-meta">
         <span class="tl-name">{{ fileName }}</span>
-        <span v-if="model" class="tl-layers">{{ t('tl_gen_layers', { count: model.layers.length }) }}</span>
+        <span v-if="layerCount > 0" class="tl-layers">{{ t('tl_gen_layers', { count: layerCount }) }}</span>
         <van-tag v-if="isSample" size="medium" type="warning">{{ t('tl_gen_sample') }}</van-tag>
       </div>
 
@@ -24,7 +24,7 @@
           round
           type="primary"
           size="small"
-          :disabled="!model"
+          :disabled="layerCount === 0"
           :icon="playing ? 'pause' : 'play'"
           @click="togglePlay"
         >
@@ -33,7 +33,7 @@
         <van-slider
           v-model="progressPct"
           class="tl-slider"
-          :disabled="!model"
+          :disabled="layerCount === 0"
           bar-height="4"
           @change="onSliderChange"
         />
@@ -59,7 +59,7 @@
         block
         type="primary"
         :loading="exporting"
-        :disabled="!model"
+        :disabled="layerCount === 0"
         @click="exportVideo"
       >
         {{ exporting ? t('tl_gen_exporting') : t('tl_gen_export') }}
@@ -74,17 +74,12 @@ import { showToast } from 'vant'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { unzipSync } from 'fflate'
+import * as THREE from 'three'
+import { init, type WebGLPreview } from 'gcode-preview'
 import { FTPSClient } from '@bambulab-p1screen/printer-api'
 import { createFtpUrl } from '../../printer'
 import { getCurrentDevice } from '../../utils/device'
-import {
-  generateSampleGcode,
-  layerPointCount,
-  parseGcodeTimelapse,
-  type TimelapseLayer,
-  type TimelapseModel,
-  type TimelapsePathType,
-} from '../../utils/gcodeTimelapse'
+import { generateSampleGcode } from '../../utils/gcodeTimelapse'
 import BasePage from '../../components/BasePage.vue'
 import { usePrinterStore } from '../../stores/printer'
 
@@ -101,7 +96,8 @@ const loadingText = ref('')
 const errorText = ref('')
 const fileName = ref('')
 const isSample = ref(false)
-const model = ref<TimelapseModel | null>(null)
+/** Printable layers — drives the slider and the playback mapping. */
+const layerCount = ref(0)
 
 const canvasEl = ref<HTMLCanvasElement | null>(null)
 const progressPct = ref(0)
@@ -110,358 +106,195 @@ const durationSec = ref(15)
 const exporting = ref(false)
 
 /**
- * Camera model: a fixed camera above the printer looking down, tilted just
- * enough to see the sides — exactly how a real timelapse is shot. Screen
- * mapping is sx = x, sy = y*cos + z*sin with TILT ≈ 22°.
+ * Rendering engine: gcode-preview (MIT) — a three.js viewer that turns each
+ * extrusion path into a swept tube with the real extrusion width, lit by
+ * ambient + directional light so the bead grooves read like a photo.
+ * Every layer becomes its own Group; the timelapse is just visibility
+ * toggling, which mirrors how a real print-cam works: the head parks, one
+ * frame per finished layer.
  */
-const TILT = (22 * Math.PI) / 180
-const COS = Math.cos(TILT)
-const SIN = Math.sin(TILT)
-
-/** Filament colour from the current tray ('RRGGBBAA' Bambu format). */
-const filamentColor = (): string => {
-  const tray = (device.value as any)?.ams?.ams?.[0]?.tray?.[0]
-  const raw: string | undefined = tray?.tray_color
-  if (raw && /^[0-9a-fA-F]{8}$/.test(raw)) {
-    const r = parseInt(raw.slice(0, 2), 16)
-    const g = parseInt(raw.slice(2, 4), 16)
-    const b = parseInt(raw.slice(4, 6), 16)
-    // Keep some luminance range so shading still reads.
-    return `rgb(${r}, ${g}, ${b})`
-  }
-  return '#2f6fd0'
-}
-
-/** Mixes a colour toward white by amount 0..1. */
-const tint = (color: string, amount: number): string => {
-  const m = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(color)
-  if (!m) return color
-  const mix = (c: number) => Math.round(c + (255 - c) * amount)
-  return `rgb(${mix(Number(m[1]))}, ${mix(Number(m[2]))}, ${mix(Number(m[3]))})`
-}
-
-/** Mixes a colour toward black by amount 0..1. */
-const shade = (color: string, amount: number): string => {
-  const m = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(color)
-  if (!m) return color
-  const f = 1 - amount
-  const r = Math.round(Number(m[1]) * f)
-  const g = Math.round(Number(m[2]) * f)
-  const b = Math.round(Number(m[3]) * f)
-  return `rgb(${r}, ${g}, ${b})`
-}
-
-/** Top-face colour — refreshed from the current tray when a file opens. */
-let TOP_COLOR = '#2f6fd0'
-/** Rim / fresh-bead colour — a light tint of the filament. */
-let RIM_COLOR = '#8fb4f5'
-
-interface View {
-  scale: number
-  zScale: number
-  offX: number
-  offY: number
-  w: number
-  h: number
-  dpr: number
-  /** Model centre in bed coordinates — gradient anchor for side walls. */
-  centerX: number
-  centerY: number
-}
-
-let view: View | null = null
-let offscreen: HTMLCanvasElement | null = null
-/** Layer index already baked into the offscreen canvas. */
-let bakedLayers = 0
+let preview: WebGLPreview | null = null
+/** One group per gcode layer (index 0 is the parser's preamble — empty). */
+let layerGroups: THREE.Group[] = []
 let raf = 0
 /** Playback anchor: progress at the time the current rAF run started. */
 let anchorPct = 0
 let anchorTime = 0
 
-const ctxOf = (canvas: HTMLCanvasElement) => canvas.getContext('2d')!
+/** P1-series bed size in mm. */
+const BED = 256
+
+/** Lines fed to the parser per UI slice — keeps the thread responsive. */
+const PARSE_CHUNK_LINES = 20000
+/** Layers built per UI slice while the scene is assembled. */
+const BUILD_CHUNK_LAYERS = 24
+
+const yieldToUI = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
+
+/** Filament colour(s) from the AMS trays ('RRGGBBAA' Bambu format). */
+const filamentColors = (): string[] => {
+  const trays: any[] = (device.value as any)?.ams?.ams?.[0]?.tray ?? []
+  const colors = trays
+    .map((tr: any) => tr?.tray_color)
+    .filter((raw: any): raw is string => typeof raw === 'string' && /^[0-9a-fA-F]{8}$/.test(raw))
+    .map((raw: string) => `#${raw.slice(0, 6).toLowerCase()}`)
+  return colors.length > 0 ? colors : ['#2f6fd0']
+}
+
+/** Keep the frame inside the visible page area (controls sit below). */
+const stageHeight = (w: number): number =>
+  Math.round(Math.min(w * 0.78, Math.max(window.innerHeight * 0.6, 260)))
 
 /**
- * Physical proportions: z scales exactly like x/y — a 0.24 mm layer is a
- * hairline on screen, which is what a top-down timelapse actually shows.
+ * Builds the three.js scene. The library renders every layer into its own
+ * group synchronously; only extrusion-bearing layers count toward the
+ * timeline (start/end gcode travel lifts would add dead frames). Parsing
+ * and scene assembly are chunked so large files never freeze the UI.
  */
-const computeView = (m: TimelapseModel, canvas: HTMLCanvasElement): View => {
+const buildPreview = async (text: string): Promise<void> => {
+  const canvas = canvasEl.value
+  if (!canvas) throw new Error('canvas not ready')
+  const w = canvas.clientWidth || canvas.parentElement?.clientWidth || 360
+  const h = stageHeight(w)
   const dpr = Math.min(window.devicePixelRatio || 1, 2)
-  const w = canvas.clientWidth
-  const h = Math.round(w * 0.78)
   canvas.width = Math.round(w * dpr)
   canvas.height = Math.round(h * dpr)
   canvas.style.height = `${h}px`
-  const c = ctxOf(canvas)
-  c.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-  const margin = 12
-  const scale = Math.min((w - margin * 2) / 256, (h - margin * 2) / (256 * COS + 90 * SIN))
-  return {
-    scale,
-    zScale: 1,
-    offX: w / 2 - 128 * scale,
-    offY: h / 2 - (128 * COS) * scale,
-    w,
-    h,
-    dpr,
-    centerX: (m.minX + m.maxX) / 2,
-    centerY: (m.minY + m.maxY) / 2,
+  const colors = filamentColors()
+  const p = init({
+    canvas,
+    // Volumetric rendering: each path becomes a swept tube with the real
+    // extrusion width, so walls and infill show as physical beads.
+    renderTubes: true,
+    extrusionWidth: 0.42,
+    lineHeight: 0.2,
+    renderTravel: false,
+    buildVolume: { x: BED, y: BED, z: BED },
+    backgroundColor: '#101318',
+    initialCameraPosition: [-140, 420, 460],
+    minLayerThreshold: 0.05,
+    extrusionColor: colors.length > 1 ? colors : colors[0],
+  })
+  p.resize()
+  p.renderer.setPixelRatio(dpr)
+
+  // Chunked parse — the library concatenates internally, so feeding it
+  // line batches is equivalent to one call but keeps the thread free.
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length; i += PARSE_CHUNK_LINES) {
+    p.parser.parseGCode(lines.slice(i, i + PARSE_CHUNK_LINES))
+    const pct = Math.min(40, Math.round(((i + PARSE_CHUNK_LINES) / lines.length) * 40))
+    loadingText.value = `${t('tl_gen_parsing')} ${pct}%`
+    await yieldToUI()
   }
-}
 
-const sx = (v: View, x: number) => v.offX + x * v.scale
-const sy = (v: View, y: number, z: number) => v.offY + (y * COS + z * SIN) * v.scale
+  const layers = p.layers
+  if (layers.length <= 1) throw new Error('no printable layers found')
 
-const drawBed = (c: CanvasRenderingContext2D, v: View) => {
-  // Bed plate.
-  c.fillStyle = '#14161b'
-  c.fillRect(sx(v, 0), sy(v, 0, 0), 256 * v.scale, 256 * COS * v.scale)
-  // Faint grid, like the PEI plate pattern under print-cam light.
-  c.strokeStyle = 'rgba(148, 163, 184, 0.07)'
-  c.lineWidth = 1
-  c.beginPath()
-  for (let g = 32; g < 256; g += 32) {
-    c.moveTo(sx(v, g), sy(v, 0, 0))
-    c.lineTo(sx(v, g), sy(v, 256, 0))
-    c.moveTo(sx(v, 0), sy(v, g, 0))
-    c.lineTo(sx(v, 256), sy(v, g, 0))
+  // Drop the library's build-volume wireframe — a dark plate with a faint
+  // grid reads closer to a real print-cam frame.
+  const anyP = p as any
+  anyP.resetState()
+  anyP.initScene()
+  for (const child of [...p.scene.children]) {
+    if ((child as any).isLight) continue
+    p.scene.remove(child)
   }
-  c.stroke()
-  // Bed edge.
-  c.strokeStyle = 'rgba(148, 163, 184, 0.28)'
-  c.strokeRect(sx(v, 0), sy(v, 0, 0), 256 * v.scale, 256 * COS * v.scale)
-}
+  const plate = new THREE.Mesh(
+    new THREE.PlaneGeometry(BED, BED),
+    new THREE.MeshBasicMaterial({ color: 0x1b1f27 }),
+  )
+  plate.rotation.x = -Math.PI / 2
+  p.scene.add(plate)
+  const grid = new THREE.GridHelper(BED, 8, 0x39414f, 0x272c35)
+  grid.position.y = 0.02
+  p.scene.add(grid)
 
-/**
- * Draws one layer: solid top face from the outer contour, extrusion lines
- * as texture, and (while growing) a bright rim so the newest layer reads
- * as "being printed right now". Returns the last point drawn — the nozzle
- * position for toolhead rendering.
- */
-const drawLayerSolid = (
-  c: CanvasRenderingContext2D,
-  v: View,
-  layer: TimelapseLayer,
-  maxSegs: number,
-  complete: boolean,
-): { x: number; y: number } | null => {
-  const z1 = layer.z
-  const outer = layer.segs.outer
-  const others = (Object.keys(layer.segs) as TimelapsePathType[]).filter(k => k !== 'outer')
-  let last: { x: number; y: number } | null = null
+  // Bounds from extrusion-bearing layers only — the end-of-print travel
+  // lift would otherwise inflate the camera distance. Running nozzle Z is
+  // sampled only at extruding moves for the same reason.
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+  let printable = 0
+  let runZ = 0
 
-  // Solid top face from the outer contour.
-  if (outer) {
-    c.beginPath()
-    let started = false
-    const limit = Math.min(outer.length / 4, maxSegs)
-    for (let i = 0, s = 0; s < limit; i += 4, s++) {
-      const px = sx(v, outer[i])
-      const py = sy(v, outer[i + 1], z1)
-      if (!started) {
-        c.moveTo(px, py)
-        started = true
-      } else {
-        c.lineTo(px, py)
+  layerGroups = []
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i]
+    const prints = layer.commands.some(c => (c.params.e ?? 0) > 0)
+    if (prints) {
+      printable++
+      for (const cmd of layer.commands) {
+        const q = cmd.params
+        if (q.z != null) runZ = q.z
+        if ((q.e ?? 0) > 0 && q.x != null) {
+          minX = Math.min(minX, q.x)
+          maxX = Math.max(maxX, q.x)
+          minY = Math.min(minY, q.y ?? 0)
+          maxY = Math.max(maxY, q.y ?? 0)
+          minZ = Math.min(minZ, runZ)
+          maxZ = Math.max(maxZ, runZ)
+        }
       }
-      last = { x: outer[i], y: outer[i + 1] }
     }
-    if (complete) {
-      c.closePath()
-      // Same-colour stroke first: fills anti-alias their edge against
-      // transparency, and stacked layer edges would accumulate into faint
-      // rings. The stroke seals them.
-      c.strokeStyle = TOP_COLOR
-      c.lineWidth = 1
-      c.stroke()
-      c.fillStyle = TOP_COLOR
-      c.fill()
-    } else {
-      // Growing layer: bright rim along the outline.
-      c.strokeStyle = RIM_COLOR
-      c.lineWidth = 2
-      c.lineJoin = 'round'
-      c.lineCap = 'round'
-      c.stroke()
+    anyP.group = anyP.createGroup(`layer${i}`)
+    anyP.renderLayer(i)
+    anyP.batchGeometries()
+    p.scene.add(anyP.group)
+    layerGroups.push(anyP.group)
+    if (i % BUILD_CHUNK_LAYERS === 0) {
+      const pct = 40 + Math.round((i / layers.length) * 60)
+      loadingText.value = `${t('tl_gen_rendering')} ${pct}%`
+      await yieldToUI()
     }
   }
-
-  // Extrusion texture — every layer, faint: a top-down timelapse shows the
-  // extrusion lines on every exposed surface, strongest on the top layer.
-  const strength = complete ? 0.5 : 1
-  let quota = maxSegs
-  for (const key of others) {
-    const pts = layer.segs[key]
-    if (!pts || quota <= 0) continue
-    const available = pts.length / 4
-    const take = Math.min(available, quota)
-    c.strokeStyle =
-      key === 'support'
-        ? `rgba(255, 214, 130, ${0.4 * strength})`
-        : `rgba(255, 255, 255, ${0.22 * strength})`
-    c.lineWidth = Math.max(0.5 * v.scale, 1.1)
-    c.lineCap = 'round'
-    c.beginPath()
-    for (let i = 0, s = 0; s < take; i += 4, s++) {
-      c.moveTo(sx(v, pts[i]), sy(v, pts[i + 1], z1))
-      c.lineTo(sx(v, pts[i + 2]), sy(v, pts[i + 3], z1))
-    }
-    c.stroke()
-    quota -= take
-    if (take < available) break
+  if (printable === 0 || !Number.isFinite(minX)) {
+    throw new Error('no printable layers found')
   }
-  return last
+
+  // Camera fit. The group is rotated -90° about X and offset to the bed
+  // centre, so gcode (x, y, z) maps to world (x - BED/2, z, BED/2 - y).
+  const cx = (minX + maxX) / 2
+  const cy = (minY + maxY) / 2
+  const cz = (minZ + maxZ) / 2
+  const radius = Math.max(maxX - minX, maxY - minY, (maxZ - minZ) * 1.35) / 2 + 4
+  const fovRad = (p.camera.fov * Math.PI) / 180
+  const dist = (radius / Math.sin(fovRad / 2)) * 1.12
+  p.controls.target.set(cx - BED / 2, cz, BED / 2 - cy)
+  // Three-quarter view from front-right-above, like a chamber camera.
+  const dx = 0.72
+  const dy = 0.66
+  const dz = 1
+  const dl = Math.hypot(dx, dy, dz)
+  p.camera.position.set(
+    p.controls.target.x + (dx / dl) * dist,
+    p.controls.target.y + (dy / dl) * dist,
+    p.controls.target.z + (dz / dl) * dist,
+  )
+  p.camera.updateProjectionMatrix()
+  p.controls.update()
+  p.renderer.render(p.scene, p.camera)
+
+  preview = p
+  layerCount.value = printable
 }
 
-/**
- * Continuous side wall of the printed stack: the outer contour extruded
- * from the bed up to the top baked layer, filled with one vertical
- * gradient. front=false draws the half behind the print (covered by the
- * top faces), front=true the half in front (visible) — caller draws the
- * front half after the top faces.
- */
-const drawSkirt = (
-  c: CanvasRenderingContext2D,
-  v: View,
-  m: TimelapseModel,
-  topIndex: number,
-  front: boolean,
-) => {
-  const top = m.layers[Math.max(Math.min(topIndex, m.layers.length - 1), 0)]
-  const outer = top?.segs.outer
-  if (!outer) return
-  const z1 = top.z
-  const yBottom = sy(v, v.centerY, 0)
-  const yTop = sy(v, v.centerY, z1)
-  const grad = c.createLinearGradient(0, yBottom, 0, yTop)
-  grad.addColorStop(0, shade(TOP_COLOR, 0.62))
-  grad.addColorStop(1, shade(TOP_COLOR, 0.3))
-  c.fillStyle = grad
-  c.beginPath()
-  for (let i = 0; i + 3 < outer.length; i += 4) {
-    // Split by whether the segment's midpoint sits in front of / behind
-    // the model centre (screen-up is -y).
-    const mid = (outer[i + 1] + outer[i + 3]) / 2
-    if (mid > v.centerY !== front) continue
-    c.moveTo(sx(v, outer[i]), sy(v, outer[i + 1], 0))
-    c.lineTo(sx(v, outer[i + 2]), sy(v, outer[i + 3], 0))
-    c.lineTo(sx(v, outer[i + 2]), sy(v, outer[i + 3], z1))
-    c.lineTo(sx(v, outer[i]), sy(v, outer[i + 1], z1))
-    c.closePath()
+/** Shows every layer up to `progress` and draws one frame. */
+const renderAt = (progress: number): void => {
+  const total = Math.max(layerCount.value, 1)
+  // Layer groups are 1-based — group 0 is the parser's preamble (start
+  // gcode, never visible). Progress 0 shows the first finished layer,
+  // progress 1 the whole print.
+  const upto = Math.min(Math.round(progress * (total - 1)) + 1, total)
+  for (let i = 0; i < layerGroups.length; i++) {
+    layerGroups[i].visible = i <= upto
   }
-  c.fill()
-}
-
-/**
- * The toolhead: extruder body riding above the nozzle, a drop shadow on
- * the print, and the hot-end tip at the extrusion point. This is what
- * makes the frame read as a real print-cam shot.
- */
-const drawToolhead = (c: CanvasRenderingContext2D, v: View, x: number, y: number, z: number) => {
-  const nx = sx(v, x)
-  const ny = sy(v, y, z)
-  // Shadow cast onto the print below.
-  c.fillStyle = 'rgba(0, 0, 0, 0.35)'
-  c.beginPath()
-  c.ellipse(nx + 3 * v.scale, ny + 4 * v.scale, 20 * v.scale, 9 * v.scale, 0, 0, Math.PI * 2)
-  c.fill()
-  // Extruder body — sits behind (above on screen) the nozzle. The P1
-  // extruder is a wide carriage, wider than it is deep.
-  const bx = nx
-  const by = ny - 18 * v.scale
-  const bw = 46 * v.scale
-  const bh = 16 * v.scale
-  c.fillStyle = '#aeb4bd'
-  c.strokeStyle = '#6b7280'
-  c.lineWidth = 1
-  c.beginPath()
-  if (typeof c.roundRect === 'function') {
-    c.roundRect(bx - bw / 2, by - bh / 2, bw, bh, 3 * v.scale)
-  } else {
-    c.rect(bx - bw / 2, by - bh / 2, bw, bh)
-  }
-  c.fill()
-  c.stroke()
-  // Fan + motor detail.
-  c.fillStyle = '#4b5563'
-  c.beginPath()
-  c.arc(bx - 9 * v.scale, by, 4 * v.scale, 0, Math.PI * 2)
-  c.arc(bx + 9 * v.scale, by, 4 * v.scale, 0, Math.PI * 2)
-  c.fill()
-  // Hot end + nozzle tip at the extrusion point.
-  c.fillStyle = '#d1d5db'
-  c.beginPath()
-  c.moveTo(nx - 3 * v.scale, ny - 8 * v.scale)
-  c.lineTo(nx + 3 * v.scale, ny - 8 * v.scale)
-  c.lineTo(nx + 1.4 * v.scale, ny)
-  c.lineTo(nx - 1.4 * v.scale, ny)
-  c.closePath()
-  c.fill()
-  // Freshly extruded bead glowing at the tip.
-  c.fillStyle = RIM_COLOR
-  c.beginPath()
-  c.arc(nx, ny, 1.6 * v.scale, 0, Math.PI * 2)
-  c.fill()
-}
-
-const bakeLayer = (m: TimelapseModel, index: number) => {
-  if (!offscreen || !view) return
-  drawLayerSolid(ctxOf(offscreen), view, m.layers[index], Infinity, true)
-  bakedLayers = index + 1
-}
-
-const draw = (progress: number) => {
-  const m = model.value
-  const canvas = canvasEl.value
-  if (!m || !canvas || !view || !offscreen || m.layers.length === 0) return
-  const v = view
-  const c = ctxOf(canvas)
-  c.clearRect(0, 0, v.w, v.h)
-  drawBed(c, v)
-  const total = m.layers.length
-  const layerFloat = progress * (total - 1)
-  const current = Math.min(Math.floor(layerFloat), total - 1)
-  const sub = layerFloat - current
-  // Bake every fully-revealed layer that is not baked yet.
-  while (bakedLayers < current) bakeLayer(m, bakedLayers)
-  // Painter's order for the side wall: back half first (hidden by the
-  // top faces), front half after.
-  drawSkirt(c, v, m, bakedLayers > 0 ? bakedLayers - 1 : 0, false)
-  c.drawImage(offscreen, 0, 0, v.w, v.h)
-  drawSkirt(c, v, m, bakedLayers > 0 ? bakedLayers - 1 : 0, true)
-  // Growing layer + toolhead at the extrusion point.
-  const segs = layerPointCount(m.layers[current])
-  if (segs > 0 && sub > 0) {
-    const last = drawLayerSolid(
-      c,
-      v,
-      m.layers[current],
-      Math.max(1, Math.round(segs * sub)),
-      false,
-    )
-    if (last) drawToolhead(c, v, last.x, last.y, m.layers[current].z)
-  }
-  // Top-light pass: source-atop tints only the model pixels.
-  c.globalCompositeOperation = 'source-atop'
-  const light = c.createLinearGradient(0, 0, 0, v.h)
-  light.addColorStop(0, 'rgba(255,255,255,0.10)')
-  light.addColorStop(0.5, 'rgba(255,255,255,0)')
-  light.addColorStop(1, 'rgba(0,0,0,0.16)')
-  c.fillStyle = light
-  c.fillRect(0, 0, v.w, v.h)
-  c.globalCompositeOperation = 'source-over'
-}
-
-const resetOffscreen = () => {
-  const canvas = canvasEl.value
-  if (!canvas || !view) return
-  offscreen = document.createElement('canvas')
-  offscreen.width = canvas.width
-  offscreen.height = canvas.height
-  const c = ctxOf(offscreen)
-  c.setTransform(view.dpr, 0, 0, view.dpr, 0, 0)
-  c.lineCap = 'round'
-  bakedLayers = 0
+  if (preview) preview.renderer.render(preview.scene, preview.camera)
 }
 
 const tick = (now: number) => {
@@ -469,7 +302,7 @@ const tick = (now: number) => {
   const elapsed = now - anchorTime
   const target = Math.min(1, anchorPct + elapsed / (durationSec.value * 1000))
   progressPct.value = Math.round(target * 1000) / 10
-  draw(target)
+  renderAt(target)
   if (target >= 1) {
     playing.value = false
     raf = 0
@@ -479,7 +312,7 @@ const tick = (now: number) => {
 }
 
 const togglePlay = () => {
-  if (!model.value) return
+  if (layerCount.value === 0) return
   if (playing.value) {
     playing.value = false
     if (raf) cancelAnimationFrame(raf)
@@ -488,7 +321,6 @@ const togglePlay = () => {
   }
   if (progressPct.value >= 100) {
     progressPct.value = 0
-    resetOffscreen()
   }
   anchorPct = progressPct.value / 100
   anchorTime = 0
@@ -500,14 +332,12 @@ const onSliderChange = () => {
   playing.value = false
   if (raf) cancelAnimationFrame(raf)
   raf = 0
-  resetOffscreen()
-  draw(progressPct.value / 100)
+  renderAt(progressPct.value / 100)
 }
 
 const playOnce = (): Promise<void> =>
   new Promise<void>(resolve => {
     progressPct.value = 0
-    resetOffscreen()
     anchorPct = 0
     anchorTime = 0
     playing.value = true
@@ -516,7 +346,7 @@ const playOnce = (): Promise<void> =>
       const elapsed = now - anchorTime
       const target = Math.min(1, elapsed / (durationSec.value * 1000))
       progressPct.value = Math.round(target * 1000) / 10
-      draw(target)
+      renderAt(target)
       if (target >= 1) {
         playing.value = false
         resolve()
@@ -552,7 +382,7 @@ const pickMime = (): string => {
 
 const exportVideo = async () => {
   const canvas = canvasEl.value
-  if (!canvas || !model.value || exporting.value) return
+  if (!canvas || layerCount.value === 0 || exporting.value) return
   exporting.value = true
   try {
     const stream = canvas.captureStream(30)
@@ -631,24 +461,13 @@ const start = async () => {
       text = await loadGcodeFromPrinter(path, fileName.value)
     }
     loadingText.value = t('tl_gen_parsing')
+    // Let the loading overlay paint before the first parse slice blocks.
     await nextTick()
-    const parsed = await parseGcodeTimelapse(text, p => {
-      loadingText.value = `${t('tl_gen_parsing')} ${Math.round(p * 100)}%`
-    })
-    if (parsed.layers.length === 0) throw new Error('no printable layers found')
-    model.value = parsed
-    // Filament colour from the active tray — a real timelapse shows the
-    // actual plastic, not a generic blue.
-    TOP_COLOR = filamentColor()
-    RIM_COLOR = tint(TOP_COLOR, 0.45)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await buildPreview(text)
     phase.value = 'ready'
     await nextTick()
-    const canvas = canvasEl.value
-    if (canvas) {
-      view = computeView(parsed, canvas)
-      resetOffscreen()
-      draw(0)
-    }
+    renderAt(0)
   } catch (err: any) {
     phase.value = 'error'
     errorText.value = err?.message ?? String(err)
@@ -659,6 +478,9 @@ onMounted(start)
 
 onBeforeUnmount(() => {
   if (raf) cancelAnimationFrame(raf)
+  preview?.dispose()
+  preview = null
+  layerGroups = []
 })
 </script>
 
@@ -734,10 +556,5 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.tl-durations-label {
-  font-size: 12px;
-  color: var(--van-text-color-3);
 }
 </style>
