@@ -218,7 +218,7 @@ export const generateSampleGcode = (): string => {
   for (let l = 0; l < layerCount; l++) {
     const z = (l + 1) * layerHeight
     // Vase silhouette: wide at the bottom, pinched in the middle, flared top.
-    const radius = 30 + 16 * Math.sin((l / layerCount) * Math.PI * 1.6)
+    const radius = 22 + 13 * Math.sin((l / layerCount) * Math.PI * 1.6)
     lines.push(`; layer #${l + 1}, Z = ${z.toFixed(2)}`)
     lines.push(';TYPE:WALL-OUTER')
     const sides = 72

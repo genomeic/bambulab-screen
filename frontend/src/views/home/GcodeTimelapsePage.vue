@@ -86,6 +86,9 @@ import {
   type TimelapsePathType,
 } from '../../utils/gcodeTimelapse'
 import BasePage from '../../components/BasePage.vue'
+import { usePrinterStore } from '../../stores/printer'
+
+const { device } = usePrinterStore()
 
 const { t } = useI18n()
 const route = useRoute()
@@ -106,18 +109,52 @@ const playing = ref(false)
 const durationSec = ref(15)
 const exporting = ref(false)
 
-const ANG = Math.PI / 6 // classic 30° isometric — three-quarter view
-const COS = Math.cos(ANG)
-const SIN = Math.sin(ANG)
+/**
+ * Camera model: a fixed camera above the printer looking down, tilted just
+ * enough to see the sides — exactly how a real timelapse is shot. Screen
+ * mapping is sx = x, sy = y*cos + z*sin with TILT ≈ 22°.
+ */
+const TILT = (22 * Math.PI) / 180
+const COS = Math.cos(TILT)
+const SIN = Math.sin(TILT)
 
-/** Solid top-face colour (the "plastic"). */
-const TOP_COLOR = '#1e40af'
-/** Side wall gradient anchors — the bottom of every layer fades into the
- *  shade below, the top meets the top-face colour, so the stack reads as
- *  one continuous surface with faint layer steps. */
-const SIDE_DARK = '#122a6e'
-/** Bright rim — drawn only on the growing layer, not on baked ones. */
-const RIM_COLOR = '#3b82f6'
+/** Filament colour from the current tray ('RRGGBBAA' Bambu format). */
+const filamentColor = (): string => {
+  const tray = (device.value as any)?.ams?.ams?.[0]?.tray?.[0]
+  const raw: string | undefined = tray?.tray_color
+  if (raw && /^[0-9a-fA-F]{8}$/.test(raw)) {
+    const r = parseInt(raw.slice(0, 2), 16)
+    const g = parseInt(raw.slice(2, 4), 16)
+    const b = parseInt(raw.slice(4, 6), 16)
+    // Keep some luminance range so shading still reads.
+    return `rgb(${r}, ${g}, ${b})`
+  }
+  return '#2f6fd0'
+}
+
+/** Mixes a colour toward white by amount 0..1. */
+const tint = (color: string, amount: number): string => {
+  const m = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(color)
+  if (!m) return color
+  const mix = (c: number) => Math.round(c + (255 - c) * amount)
+  return `rgb(${mix(Number(m[1]))}, ${mix(Number(m[2]))}, ${mix(Number(m[3]))})`
+}
+
+/** Mixes a colour toward black by amount 0..1. */
+const shade = (color: string, amount: number): string => {
+  const m = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(color)
+  if (!m) return color
+  const f = 1 - amount
+  const r = Math.round(Number(m[1]) * f)
+  const g = Math.round(Number(m[2]) * f)
+  const b = Math.round(Number(m[3]) * f)
+  return `rgb(${r}, ${g}, ${b})`
+}
+
+/** Top-face colour — refreshed from the current tray when a file opens. */
+let TOP_COLOR = '#2f6fd0'
+/** Rim / fresh-bead colour — a light tint of the filament. */
+let RIM_COLOR = '#8fb4f5'
 
 interface View {
   scale: number
@@ -144,11 +181,9 @@ let anchorTime = 0
 const ctxOf = (canvas: HTMLCanvasElement) => canvas.getContext('2d')!
 
 /**
- * Gentle vertical stretch (2.2×) — enough depth to read as a solid object,
- * small enough that layer lines stay hairline instead of striped.
+ * Physical proportions: z scales exactly like x/y — a 0.24 mm layer is a
+ * hairline on screen, which is what a top-down timelapse actually shows.
  */
-const Z_STRETCH = 2.2
-
 const computeView = (m: TimelapseModel, canvas: HTMLCanvasElement): View => {
   const dpr = Math.min(window.devicePixelRatio || 1, 2)
   const w = canvas.clientWidth
@@ -159,22 +194,13 @@ const computeView = (m: TimelapseModel, canvas: HTMLCanvasElement): View => {
   const c = ctxOf(canvas)
   c.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-  const sxMin = (m.minX - m.maxY) * COS
-  const sxMax = (m.maxX - m.minY) * COS
-  const sumMin = m.minX + m.minY
-  const sumMax = m.maxX + m.maxY
-  const syMin = sumMin * SIN - m.maxZ * Z_STRETCH
-  const syMax = sumMax * SIN
-  const margin = 14
-  const scale = Math.min(
-    (w - margin * 2) / Math.max(sxMax - sxMin, 1),
-    (h - margin * 2) / Math.max(syMax - syMin, 1),
-  )
+  const margin = 12
+  const scale = Math.min((w - margin * 2) / 256, (h - margin * 2) / (256 * COS + 90 * SIN))
   return {
     scale,
-    zScale: Z_STRETCH,
-    offX: w / 2 - ((sxMin + sxMax) / 2) * scale,
-    offY: h / 2 - ((syMin + syMax) / 2) * scale,
+    zScale: 1,
+    offX: w / 2 - 128 * scale,
+    offY: h / 2 - (128 * COS) * scale,
     w,
     h,
     dpr,
@@ -183,33 +209,34 @@ const computeView = (m: TimelapseModel, canvas: HTMLCanvasElement): View => {
   }
 }
 
-const sx = (v: View, x: number, y: number) => v.offX + (x - y) * COS * v.scale
-const sy = (v: View, x: number, y: number, z: number) => v.offY + ((x + y) * SIN - z * v.zScale) * v.scale
+const sx = (v: View, x: number) => v.offX + x * v.scale
+const sy = (v: View, y: number, z: number) => v.offY + (y * COS + z * SIN) * v.scale
 
 const drawBed = (c: CanvasRenderingContext2D, v: View) => {
-  c.strokeStyle = 'rgba(148, 163, 184, 0.35)'
+  // Bed plate.
+  c.fillStyle = '#14161b'
+  c.fillRect(sx(v, 0), sy(v, 0, 0), 256 * v.scale, 256 * COS * v.scale)
+  // Faint grid, like the PEI plate pattern under print-cam light.
+  c.strokeStyle = 'rgba(148, 163, 184, 0.07)'
   c.lineWidth = 1
-  const pad = 4
   c.beginPath()
-  const c0x = 0 - pad
-  const c0y = 0 - pad
-  const c1x = 256 + pad
-  const c1y = 256 + pad
-  c.moveTo(sx(v, c0x, c0y), sy(v, c0x, c0y, 0))
-  c.lineTo(sx(v, c1x, c0y), sy(v, c1x, c0y, 0))
-  c.lineTo(sx(v, c1x, c1y), sy(v, c1x, c1y, 0))
-  c.lineTo(sx(v, c0x, c1y), sy(v, c0x, c1y, 0))
-  c.closePath()
+  for (let g = 32; g < 256; g += 32) {
+    c.moveTo(sx(v, g), sy(v, 0, 0))
+    c.lineTo(sx(v, g), sy(v, 256, 0))
+    c.moveTo(sx(v, 0), sy(v, g, 0))
+    c.lineTo(sx(v, 256), sy(v, g, 0))
+  }
   c.stroke()
+  // Bed edge.
+  c.strokeStyle = 'rgba(148, 163, 184, 0.28)'
+  c.strokeRect(sx(v, 0), sy(v, 0, 0), 256 * v.scale, 256 * COS * v.scale)
 }
 
 /**
- * Draws one layer as a solid slab:
- * - the outer contour is filled as a solid top face,
- * - infill / inner / support paths show as faint texture on top.
- * The continuous side wall (skirt) is drawn once per frame by drawSkirt().
- * While a layer is still growing (complete=false) the top face is only
- * stroked as a thick outline, so layer growth stays visible.
+ * Draws one layer: solid top face from the outer contour, extrusion lines
+ * as texture, and (while growing) a bright rim so the newest layer reads
+ * as "being printed right now". Returns the last point drawn — the nozzle
+ * position for toolhead rendering.
  */
 const drawLayerSolid = (
   c: CanvasRenderingContext2D,
@@ -217,11 +244,11 @@ const drawLayerSolid = (
   layer: TimelapseLayer,
   maxSegs: number,
   complete: boolean,
-  texture: boolean,
-) => {
+): { x: number; y: number } | null => {
   const z1 = layer.z
   const outer = layer.segs.outer
   const others = (Object.keys(layer.segs) as TimelapsePathType[]).filter(k => k !== 'outer')
+  let last: { x: number; y: number } | null = null
 
   // Solid top face from the outer contour.
   if (outer) {
@@ -229,96 +256,157 @@ const drawLayerSolid = (
     let started = false
     const limit = Math.min(outer.length / 4, maxSegs)
     for (let i = 0, s = 0; s < limit; i += 4, s++) {
-      const px = sx(v, outer[i], outer[i + 1])
-      const py = sy(v, outer[i], outer[i + 1], z1)
+      const px = sx(v, outer[i])
+      const py = sy(v, outer[i + 1], z1)
       if (!started) {
         c.moveTo(px, py)
         started = true
       } else {
         c.lineTo(px, py)
       }
+      last = { x: outer[i], y: outer[i + 1] }
     }
     if (complete) {
       c.closePath()
-      // Stroke the same colour first: fills anti-alias their edge against
-      // transparency, and 100+ stacked layer edges would accumulate into
-      // faint rings. A same-colour stroke seals them.
+      // Same-colour stroke first: fills anti-alias their edge against
+      // transparency, and stacked layer edges would accumulate into faint
+      // rings. The stroke seals them.
       c.strokeStyle = TOP_COLOR
       c.lineWidth = 1
       c.stroke()
       c.fillStyle = TOP_COLOR
       c.fill()
-    }
-    // Bright rim — only on the growing layer; baked layers stay clean so
-    // the layer steps come from the side shading alone.
-    if (!complete) {
+    } else {
+      // Growing layer: bright rim along the outline.
       c.strokeStyle = RIM_COLOR
-      c.lineWidth = 2.2
+      c.lineWidth = 2
       c.lineJoin = 'round'
       c.lineCap = 'round'
       c.stroke()
     }
   }
 
-  // Infill / inner / support texture — only on the growing top layer;
-  // baked layers keep a clean surface (their texture would shine
-  // through the gaps between the layers above).
+  // Extrusion texture — every layer, faint: a top-down timelapse shows the
+  // extrusion lines on every exposed surface, strongest on the top layer.
+  const strength = complete ? 0.5 : 1
   let quota = maxSegs
   for (const key of others) {
     const pts = layer.segs[key]
-    if (!pts || quota <= 0 || !texture) continue
+    if (!pts || quota <= 0) continue
     const available = pts.length / 4
     const take = Math.min(available, quota)
-    c.strokeStyle = key === 'support' ? 'rgba(245, 158, 11, 0.35)' : 'rgba(96, 165, 250, 0.16)'
-    c.lineWidth = Math.max(0.45 * v.scale, 1.2)
+    c.strokeStyle =
+      key === 'support'
+        ? `rgba(255, 214, 130, ${0.4 * strength})`
+        : `rgba(255, 255, 255, ${0.22 * strength})`
+    c.lineWidth = Math.max(0.5 * v.scale, 1.1)
     c.lineCap = 'round'
     c.beginPath()
     for (let i = 0, s = 0; s < take; i += 4, s++) {
-      c.moveTo(sx(v, pts[i], pts[i + 1]), sy(v, pts[i], pts[i + 1], z1))
-      c.lineTo(sx(v, pts[i + 2], pts[i + 3]), sy(v, pts[i + 2], pts[i + 3], z1))
+      c.moveTo(sx(v, pts[i]), sy(v, pts[i + 1], z1))
+      c.lineTo(sx(v, pts[i + 2]), sy(v, pts[i + 3], z1))
     }
     c.stroke()
     quota -= take
     if (take < available) break
   }
+  return last
 }
 
 /**
- * The continuous side wall: the outer contour of the highest baked layer,
- * extruded from the bed up to that layer's Z, filled with one vertical
- * gradient (dark at the bed, top-face colour at the top). Drawn before the
- * baked layers so only its outer fringe shows — that fringe is the volume.
+ * Continuous side wall of the printed stack: the outer contour extruded
+ * from the bed up to the top baked layer, filled with one vertical
+ * gradient. front=false draws the half behind the print (covered by the
+ * top faces), front=true the half in front (visible) — caller draws the
+ * front half after the top faces.
  */
-const drawSkirt = (c: CanvasRenderingContext2D, v: View, m: TimelapseModel, topIndex: number) => {
+const drawSkirt = (
+  c: CanvasRenderingContext2D,
+  v: View,
+  m: TimelapseModel,
+  topIndex: number,
+  front: boolean,
+) => {
   const top = m.layers[Math.max(Math.min(topIndex, m.layers.length - 1), 0)]
   const outer = top?.segs.outer
   if (!outer) return
-  const z0 = 0
   const z1 = top.z
-  const yBottom = sy(v, v.centerX, v.centerY, z0)
-  const yTop = sy(v, v.centerX, v.centerY, z1)
+  const yBottom = sy(v, v.centerY, 0)
+  const yTop = sy(v, v.centerY, z1)
   const grad = c.createLinearGradient(0, yBottom, 0, yTop)
-  grad.addColorStop(0, SIDE_DARK)
-  grad.addColorStop(1, TOP_COLOR)
+  grad.addColorStop(0, shade(TOP_COLOR, 0.62))
+  grad.addColorStop(1, shade(TOP_COLOR, 0.3))
   c.fillStyle = grad
   c.beginPath()
   for (let i = 0; i + 3 < outer.length; i += 4) {
-    const x0 = outer[i]
-    const y0 = outer[i + 1]
-    const x1 = outer[i + 2]
-    const y1 = outer[i + 3]
-    c.moveTo(sx(v, x0, y0), sy(v, x0, y0, z0))
-    c.lineTo(sx(v, x1, y1), sy(v, x1, y1, z0))
-    c.lineTo(sx(v, x1, y1), sy(v, x1, y1, z1))
-    c.lineTo(sx(v, x0, y0), sy(v, x0, y0, z1))
+    // Split by whether the segment's midpoint sits in front of / behind
+    // the model centre (screen-up is -y).
+    const mid = (outer[i + 1] + outer[i + 3]) / 2
+    if (mid > v.centerY !== front) continue
+    c.moveTo(sx(v, outer[i]), sy(v, outer[i + 1], 0))
+    c.lineTo(sx(v, outer[i + 2]), sy(v, outer[i + 3], 0))
+    c.lineTo(sx(v, outer[i + 2]), sy(v, outer[i + 3], z1))
+    c.lineTo(sx(v, outer[i]), sy(v, outer[i + 1], z1))
     c.closePath()
   }
   c.fill()
 }
 
+/**
+ * The toolhead: extruder body riding above the nozzle, a drop shadow on
+ * the print, and the hot-end tip at the extrusion point. This is what
+ * makes the frame read as a real print-cam shot.
+ */
+const drawToolhead = (c: CanvasRenderingContext2D, v: View, x: number, y: number, z: number) => {
+  const nx = sx(v, x)
+  const ny = sy(v, y, z)
+  // Shadow cast onto the print below.
+  c.fillStyle = 'rgba(0, 0, 0, 0.35)'
+  c.beginPath()
+  c.ellipse(nx + 3 * v.scale, ny + 4 * v.scale, 20 * v.scale, 9 * v.scale, 0, 0, Math.PI * 2)
+  c.fill()
+  // Extruder body — sits behind (above on screen) the nozzle. The P1
+  // extruder is a wide carriage, wider than it is deep.
+  const bx = nx
+  const by = ny - 18 * v.scale
+  const bw = 46 * v.scale
+  const bh = 16 * v.scale
+  c.fillStyle = '#aeb4bd'
+  c.strokeStyle = '#6b7280'
+  c.lineWidth = 1
+  c.beginPath()
+  if (typeof c.roundRect === 'function') {
+    c.roundRect(bx - bw / 2, by - bh / 2, bw, bh, 3 * v.scale)
+  } else {
+    c.rect(bx - bw / 2, by - bh / 2, bw, bh)
+  }
+  c.fill()
+  c.stroke()
+  // Fan + motor detail.
+  c.fillStyle = '#4b5563'
+  c.beginPath()
+  c.arc(bx - 9 * v.scale, by, 4 * v.scale, 0, Math.PI * 2)
+  c.arc(bx + 9 * v.scale, by, 4 * v.scale, 0, Math.PI * 2)
+  c.fill()
+  // Hot end + nozzle tip at the extrusion point.
+  c.fillStyle = '#d1d5db'
+  c.beginPath()
+  c.moveTo(nx - 3 * v.scale, ny - 8 * v.scale)
+  c.lineTo(nx + 3 * v.scale, ny - 8 * v.scale)
+  c.lineTo(nx + 1.4 * v.scale, ny)
+  c.lineTo(nx - 1.4 * v.scale, ny)
+  c.closePath()
+  c.fill()
+  // Freshly extruded bead glowing at the tip.
+  c.fillStyle = RIM_COLOR
+  c.beginPath()
+  c.arc(nx, ny, 1.6 * v.scale, 0, Math.PI * 2)
+  c.fill()
+}
+
 const bakeLayer = (m: TimelapseModel, index: number) => {
   if (!offscreen || !view) return
-  drawLayerSolid(ctxOf(offscreen), view, m.layers[index], Infinity, true, false)
+  drawLayerSolid(ctxOf(offscreen), view, m.layers[index], Infinity, true)
   bakedLayers = index + 1
 }
 
@@ -329,37 +417,36 @@ const draw = (progress: number) => {
   const v = view
   const c = ctxOf(canvas)
   c.clearRect(0, 0, v.w, v.h)
-  c.fillStyle = '#101318'
-  c.fillRect(0, 0, v.w, v.h)
   drawBed(c, v)
-  // Continuous side wall first, so the baked top faces cover its top edge.
-  drawSkirt(c, v, m, bakedLayers > 0 ? bakedLayers - 1 : 0)
-  c.drawImage(offscreen, 0, 0, v.w, v.h)
-
   const total = m.layers.length
   const layerFloat = progress * (total - 1)
   const current = Math.min(Math.floor(layerFloat), total - 1)
   const sub = layerFloat - current
   // Bake every fully-revealed layer that is not baked yet.
   while (bakedLayers < current) bakeLayer(m, bakedLayers)
+  // Painter's order for the side wall: back half first (hidden by the
+  // top faces), front half after.
+  drawSkirt(c, v, m, bakedLayers > 0 ? bakedLayers - 1 : 0, false)
+  c.drawImage(offscreen, 0, 0, v.w, v.h)
+  drawSkirt(c, v, m, bakedLayers > 0 ? bakedLayers - 1 : 0, true)
+  // Growing layer + toolhead at the extrusion point.
   const segs = layerPointCount(m.layers[current])
   if (segs > 0 && sub > 0) {
-    drawLayerSolid(
+    const last = drawLayerSolid(
       c,
       v,
       m.layers[current],
       Math.max(1, Math.round(segs * sub)),
       false,
-      true,
     )
+    if (last) drawToolhead(c, v, last.x, last.y, m.layers[current].z)
   }
-  // Top-light pass: source-atop tints only the model pixels, giving the
-  // solid a lit top and shaded base — the main depth cue.
+  // Top-light pass: source-atop tints only the model pixels.
   c.globalCompositeOperation = 'source-atop'
   const light = c.createLinearGradient(0, 0, 0, v.h)
-  light.addColorStop(0, 'rgba(255,255,255,0.12)')
-  light.addColorStop(0.45, 'rgba(255,255,255,0.02)')
-  light.addColorStop(1, 'rgba(0,0,0,0.22)')
+  light.addColorStop(0, 'rgba(255,255,255,0.10)')
+  light.addColorStop(0.5, 'rgba(255,255,255,0)')
+  light.addColorStop(1, 'rgba(0,0,0,0.16)')
   c.fillStyle = light
   c.fillRect(0, 0, v.w, v.h)
   c.globalCompositeOperation = 'source-over'
@@ -550,6 +637,10 @@ const start = async () => {
     })
     if (parsed.layers.length === 0) throw new Error('no printable layers found')
     model.value = parsed
+    // Filament colour from the active tray — a real timelapse shows the
+    // actual plastic, not a generic blue.
+    TOP_COLOR = filamentColor()
+    RIM_COLOR = tint(TOP_COLOR, 0.45)
     phase.value = 'ready'
     await nextTick()
     const canvas = canvasEl.value
