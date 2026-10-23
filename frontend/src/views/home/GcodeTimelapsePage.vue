@@ -117,9 +117,40 @@ let preview: WebGLPreview | null = null
 /** One group per gcode layer (index 0 is the parser's preamble — empty). */
 let layerGroups: THREE.Group[] = []
 let raf = 0
+let rafCam = 0
 /** Playback anchor: progress at the time the current rAF run started. */
 let anchorPct = 0
 let anchorTime = 0
+/** Last time the slider value was pushed to the UI (throttled). */
+let lastUiUpdate = 0
+/** Last playback frame drawn — playback renders at 30 fps, not 60. */
+let lastRender = 0
+
+/** Draws one frame — called on demand only, never in an idle loop. */
+const renderFrame = (): void => {
+  if (preview) preview.renderer.render(preview.scene, preview.camera)
+}
+
+/**
+ * Camera loop. The controls only apply orbit/zoom input when update() is
+ * called, so a loop is still needed — but a frame is drawn only when the
+ * camera actually moved. The library's own unconditional 60 fps render
+ * loop is cancelled: it kept the GPU busy while the page sat idle, which
+ * is what made the UI feel laggy.
+ */
+const lastCamPos = new THREE.Vector3()
+const lastCamQuat = new THREE.Quaternion()
+const cameraLoop = (): void => {
+  if (!preview) return
+  preview.controls.update()
+  const cam = preview.camera
+  if (!cam.position.equals(lastCamPos) || !cam.quaternion.equals(lastCamQuat)) {
+    renderFrame()
+    lastCamPos.copy(cam.position)
+    lastCamQuat.copy(cam.quaternion)
+  }
+  rafCam = requestAnimationFrame(cameraLoop)
+}
 
 /** P1-series bed size in mm. */
 const BED = 256
@@ -207,6 +238,11 @@ const buildPreview = async (text: string): Promise<void> => {
   })
   p.resize()
   p.renderer.setPixelRatio(dpr)
+  // The library ships an unconditional 60 fps render loop. On a phone that
+  // keeps the main thread and GPU busy even when the scene is static, which
+  // makes the whole page feel laggy — so it is stopped here; cameraLoop
+  // below applies input and draws only when something actually changed.
+  ;(p as any).cancelAnimation()
 
   // Chunked parse — the library concatenates internally, so feeding it
   // line batches is equivalent to one call but keeps the thread free.
@@ -317,6 +353,10 @@ const buildPreview = async (text: string): Promise<void> => {
 
   preview = p
   layerCount.value = printable
+  // Seed the camera snapshot, then drive input/rendering on demand.
+  lastCamPos.copy(p.camera.position)
+  lastCamQuat.copy(p.camera.quaternion)
+  rafCam = requestAnimationFrame(cameraLoop)
 }
 
 /** Shows every layer up to `progress` and draws one frame. */
@@ -329,15 +369,24 @@ const renderAt = (progress: number): void => {
   for (let i = 0; i < layerGroups.length; i++) {
     layerGroups[i].visible = i <= upto
   }
-  if (preview) preview.renderer.render(preview.scene, preview.camera)
+  renderFrame()
 }
 
 const tick = (now: number) => {
   if (!anchorTime) anchorTime = now
   const elapsed = now - anchorTime
   const target = Math.min(1, anchorPct + elapsed / (durationSec.value * 1000))
-  progressPct.value = Math.round(target * 1000) / 10
-  renderAt(target)
+  // The slider only needs ~10 fps — pushing a Vue update every frame is
+  // wasted work while the canvas redraws anyway.
+  if (target >= 1 || now - lastUiUpdate >= 100) {
+    progressPct.value = Math.round(target * 1000) / 10
+    lastUiUpdate = now
+  }
+  // 30 fps is video-smooth and halves the GPU load of a full-scene redraw.
+  if (target >= 1 || now - lastRender >= 33) {
+    renderAt(target)
+    lastRender = now
+  }
   if (target >= 1) {
     playing.value = false
     raf = 0
@@ -359,6 +408,7 @@ const togglePlay = () => {
   }
   anchorPct = progressPct.value / 100
   anchorTime = 0
+  lastRender = 0
   playing.value = true
   raf = requestAnimationFrame(tick)
 }
@@ -375,13 +425,21 @@ const playOnce = (): Promise<void> =>
     progressPct.value = 0
     anchorPct = 0
     anchorTime = 0
+    lastUiUpdate = 0
+    lastRender = 0
     playing.value = true
     const step = (now: number) => {
       if (!anchorTime) anchorTime = now
       const elapsed = now - anchorTime
       const target = Math.min(1, elapsed / (durationSec.value * 1000))
-      progressPct.value = Math.round(target * 1000) / 10
-      renderAt(target)
+      if (target >= 1 || now - lastUiUpdate >= 100) {
+        progressPct.value = Math.round(target * 1000) / 10
+        lastUiUpdate = now
+      }
+      if (target >= 1 || now - lastRender >= 33) {
+        renderAt(target)
+        lastRender = now
+      }
       if (target >= 1) {
         playing.value = false
         resolve()
@@ -513,6 +571,7 @@ onMounted(start)
 
 onBeforeUnmount(() => {
   if (raf) cancelAnimationFrame(raf)
+  if (rafCam) cancelAnimationFrame(rafCam)
   preview?.dispose()
   preview = null
   layerGroups = []
