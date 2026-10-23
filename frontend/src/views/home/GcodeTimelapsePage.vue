@@ -100,7 +100,10 @@ const isSample = ref(false)
 const layerCount = ref(0)
 
 const canvasEl = ref<HTMLCanvasElement | null>(null)
-const progressPct = ref(0)
+// Opens on the finished print, not on layer 1. Showing a single layer on a
+// dark stage reads as an empty black frame — the whole point of the page is
+// to see the model. Playback rewinds to 0 on its own (see togglePlay).
+const progressPct = ref(100)
 const playing = ref(false)
 const durationSec = ref(15)
 const exporting = ref(false)
@@ -137,23 +140,57 @@ const renderFrame = (): void => {
  * camera actually moved. The library's own unconditional 60 fps render
  * loop is cancelled: it kept the GPU busy while the page sat idle, which
  * is what made the UI feel laggy.
+ *
+ * The once-per-second idle frame is a safety net: a lost GL surface or a
+ * compositor hiccup can blank the canvas with nothing to trigger a redraw
+ * (the old 60 fps loop recovered by accident). At 2 fps the cost is ~3% of
+ * that loop while guaranteeing the view never stays black.
  */
+const IDLE_RENDER_MS = 500
 const lastCamPos = new THREE.Vector3()
 const lastCamQuat = new THREE.Quaternion()
-const cameraLoop = (): void => {
+let lastFrameAt = 0
+const cameraLoop = (now?: number): void => {
   if (!preview) return
   preview.controls.update()
   const cam = preview.camera
-  if (!cam.position.equals(lastCamPos) || !cam.quaternion.equals(lastCamQuat)) {
+  const moved = !cam.position.equals(lastCamPos) || !cam.quaternion.equals(lastCamQuat)
+  const t = now ?? performance.now()
+  if (moved || t - lastFrameAt >= IDLE_RENDER_MS) {
+    // A canvas that had not been laid out when the scene was built keeps a
+    // zero-sized drawing buffer, and no resize event fires to correct it.
+    const el = preview.renderer.domElement
+    if (el.width === 0 || el.height === 0) {
+      preview.resize()
+      preview.renderer.setPixelRatio(pixelRatio)
+    }
     renderFrame()
     lastCamPos.copy(cam.position)
     lastCamQuat.copy(cam.quaternion)
+    lastFrameAt = t
   }
   rafCam = requestAnimationFrame(cameraLoop)
 }
 
 /** P1-series bed size in mm. */
 const BED = 256
+
+/**
+ * A lost GL context is the classic "the canvas went black and never came
+ * back" on Android: the WebView drops it under memory pressure or when the
+ * app is backgrounded. The browser only fires `webglcontextrestored` if the
+ * lost event is cancelled, so preventDefault() here is what makes recovery
+ * possible at all.
+ */
+const onContextLost = (e: Event): void => {
+  e.preventDefault()
+}
+const onContextRestored = (): void => {
+  if (!preview) return
+  preview.resize()
+  preview.renderer.setPixelRatio(pixelRatio)
+  renderFrame()
+}
 
 /**
  * Frames the model: places the camera along `dir` at the distance where the
@@ -169,12 +206,16 @@ const fitCamera = (
   hz: number,
 ): void => {
   const fov = (p.camera.fov * Math.PI) / 180
-  const aspect = Math.max(p.camera.aspect, 0.1)
+  // Math.max() propagates NaN — and a canvas that has not been laid out
+  // yet reports offsetWidth/Height 0, which makes aspect 0/0. Guard both.
+  const rawAspect = p.camera.aspect
+  const aspect = Number.isFinite(rawAspect) && rawAspect > 0.1 ? rawAspect : 1
   const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), dir).normalize()
   const up = new THREE.Vector3().crossVectors(dir, right).normalize()
   const extX = Math.abs(right.x) * hx + Math.abs(right.y) * hy + Math.abs(right.z) * hz
   const extY = Math.abs(up.x) * hx + Math.abs(up.y) * hy + Math.abs(up.z) * hz
-  const dist = Math.max(extY / Math.tan(fov / 2), extX / (Math.tan(fov / 2) * aspect), 30) * 1.1
+  let dist = Math.max(extY / Math.tan(fov / 2), extX / (Math.tan(fov / 2) * aspect), 30) * 1.1
+  if (!Number.isFinite(dist) || dist <= 0) dist = 200
   p.camera.position.copy(p.controls.target).addScaledVector(dir, dist)
   p.camera.updateProjectionMatrix()
   p.controls.minDistance = 5
@@ -189,7 +230,27 @@ const PARSE_CHUNK_LINES = 20000
 /** Layers built per UI slice while the scene is assembled. */
 const BUILD_CHUNK_LAYERS = 24
 
+/** Capped device pixel ratio — a dpr-3 phone would otherwise render 2.25× the pixels. */
+let pixelRatio = 1
+
 const yieldToUI = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
+
+/**
+ * The renderer's drawing buffer does not follow CSS resizes on its own —
+ * rotating the phone or a keyboard popping up would leave a stretched or
+ * blank canvas. Debounced because resize storms otherwise re-render per event.
+ */
+let resizeTimer = 0
+const onWindowResize = (): void => {
+  if (!preview) return
+  clearTimeout(resizeTimer)
+  resizeTimer = window.setTimeout(() => {
+    if (!preview) return
+    preview.resize()
+    preview.renderer.setPixelRatio(pixelRatio)
+    renderFrame()
+  }, 150)
+}
 
 /** Filament colour(s) from the AMS trays ('RRGGBBAA' Bambu format). */
 const filamentColors = (): string[] => {
@@ -216,9 +277,9 @@ const buildPreview = async (text: string): Promise<void> => {
   if (!canvas) throw new Error('canvas not ready')
   const w = canvas.clientWidth || canvas.parentElement?.clientWidth || 360
   const h = stageHeight(w)
-  const dpr = Math.min(window.devicePixelRatio || 1, 2)
-  canvas.width = Math.round(w * dpr)
-  canvas.height = Math.round(h * dpr)
+  pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
+  canvas.width = Math.round(w * pixelRatio)
+  canvas.height = Math.round(h * pixelRatio)
   canvas.style.height = `${h}px`
 
   const colors = filamentColors()
@@ -237,7 +298,7 @@ const buildPreview = async (text: string): Promise<void> => {
     extrusionColor: colors.length > 1 ? colors : colors[0],
   })
   p.resize()
-  p.renderer.setPixelRatio(dpr)
+  p.renderer.setPixelRatio(pixelRatio)
   // The library ships an unconditional 60 fps render loop. On a phone that
   // keeps the main thread and GPU busy even when the scene is static, which
   // makes the whole page feel laggy — so it is stopped here; cameraLoop
@@ -327,12 +388,17 @@ const buildPreview = async (text: string): Promise<void> => {
   // accumulates into a solid-looking mesh — the falloff is what makes the
   // top layer's separate lines read clearly, like a real print-cam frame.
   const top = layerGroups.length - 1
+  // A material can be referenced by more than one mesh in a group; visiting
+  // it twice would compound the multiplier and drive the colour to black.
+  const shaded = new Set<object>()
   for (let i = 0; i < layerGroups.length; i++) {
     const shade = Math.max(0.6, 1 - (top - i) * 0.006)
     if (shade >= 1) continue
     layerGroups[i].traverse(obj => {
       const mat = (obj as THREE.Mesh).material as { color?: THREE.Color } | undefined
-      if (mat?.color) mat.color.multiplyScalar(shade)
+      if (!mat?.color || shaded.has(mat.color)) return
+      shaded.add(mat.color)
+      mat.color.multiplyScalar(shade)
     })
   }
 
@@ -351,6 +417,8 @@ const buildPreview = async (text: string): Promise<void> => {
   fitCamera(p, dir, (maxX - minX) / 2, (maxZ - minZ) / 2, (maxY - minY) / 2)
   p.renderer.render(p.scene, p.camera)
 
+  canvas.addEventListener('webglcontextlost', onContextLost)
+  canvas.addEventListener('webglcontextrestored', onContextRestored)
   preview = p
   layerCount.value = printable
   // Seed the camera snapshot, then drive input/rendering on demand.
@@ -560,16 +628,24 @@ const start = async () => {
     await buildPreview(text)
     phase.value = 'ready'
     await nextTick()
-    renderAt(0)
+    // Finished print — one layer would look like an empty black frame.
+    renderAt(1)
   } catch (err: any) {
     phase.value = 'error'
     errorText.value = err?.message ?? String(err)
   }
 }
 
-onMounted(start)
+onMounted(() => {
+  window.addEventListener('resize', onWindowResize)
+  start()
+})
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', onWindowResize)
+  canvasEl.value?.removeEventListener('webglcontextlost', onContextLost)
+  canvasEl.value?.removeEventListener('webglcontextrestored', onContextRestored)
+  clearTimeout(resizeTimer)
   if (raf) cancelAnimationFrame(raf)
   if (rafCam) cancelAnimationFrame(rafCam)
   preview?.dispose()
