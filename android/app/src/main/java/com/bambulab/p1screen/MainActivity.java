@@ -17,6 +17,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebResourceRequest;
@@ -38,6 +39,8 @@ public final class MainActivity extends Activity {
   private static final String APP_INFO_TAG = "AppInfo";
   private static final int PORT = 8888;
   private static final long EXIT_INTERVAL_MS = 2000L;
+  /** startActivityForResult code for the WebView file chooser. */
+  private static final int FILE_CHOOSER_REQUEST = 42;
   private static final String APP_LIFECYCLE_FOREGROUND = "foreground";
   private static final String APP_LIFECYCLE_BACKGROUND = "background";
   private static final String PREF_LANDSCAPE_HIDE_STATUS_BAR = "landscape_hide_status_bar";
@@ -63,6 +66,8 @@ public final class MainActivity extends Activity {
   private final Handler mainHandler = new Handler(Looper.getMainLooper());
   private volatile boolean printing = false;
   private volatile boolean screenDimmed = false;
+  /** Pending <input type=file> callback — must be answered exactly once. */
+  private ValueCallback<Uri[]> fileChooserCallback;
   private final Runnable screenOffRunnable = new Runnable() {
     @Override
     public void run() {
@@ -163,6 +168,30 @@ public final class MainActivity extends Activity {
         }
         return true;
       }
+
+      /**
+       * Without this the <input type=file> element silently does nothing in
+       * the WebView, so the timelapse page could never read a model stored
+       * on the phone. The callback must be answered exactly once, including
+       * the cancel path (onActivityResult does that via parseResult).
+       */
+      @Override
+      public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
+          FileChooserParams params) {
+        if (fileChooserCallback != null) {
+          fileChooserCallback.onReceiveValue(null);
+        }
+        fileChooserCallback = callback;
+        try {
+          Intent intent = params.createIntent();
+          startActivityForResult(intent, FILE_CHOOSER_REQUEST);
+          return true;
+        } catch (Exception e) {
+          Log.w(APP_INFO_TAG, "file chooser unavailable", e);
+          fileChooserCallback = null;
+          return false;
+        }
+      }
     });
 
     webView.setWebViewClient(new WebViewClient() {
@@ -202,6 +231,20 @@ public final class MainActivity extends Activity {
     applyFullscreen();
 
     webView.loadUrl(getBaseUrl());
+  }
+
+  @Override
+  protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    if (requestCode == FILE_CHOOSER_REQUEST && fileChooserCallback != null) {
+      // parseResult returns null on cancel, which is the required "nothing
+      // picked" answer — leaving the callback hanging would freeze every
+      // later file input.
+      fileChooserCallback.onReceiveValue(
+          WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+      fileChooserCallback = null;
+      return;
+    }
+    super.onActivityResult(requestCode, resultCode, data);
   }
 
   @Override

@@ -2,7 +2,12 @@
   <BasePage :title="t('tl_gen_title')">
     <div class="tl-gen">
       <div class="tl-stage">
-        <canvas ref="canvasEl" class="tl-canvas" />
+        <!-- :key rebuilds this element through Vue when a second file is
+             loaded — swapping the node manually would leave the template
+             ref pointing at the detached old canvas after the next
+             re-render, and the new scene would build into an element that
+             is no longer in the document. -->
+        <canvas :key="sceneKey" ref="canvasEl" class="tl-canvas" />
         <div v-if="phase === 'loading'" class="tl-overlay">
           <van-loading size="24" />
           <div class="tl-overlay-text">{{ loadingText }}</div>
@@ -54,6 +59,25 @@
       </div>
 
       <van-button
+        class="tl-pick"
+        round
+        block
+        plain
+        type="primary"
+        :disabled="phase === 'loading'"
+        @click="openPicker"
+      >
+        {{ t('tl_gen_pick_device_file') }}
+      </van-button>
+      <input
+        ref="fileInput"
+        type="file"
+        accept=".gcode,.3mf"
+        class="tl-file-input"
+        @change="onFilePicked"
+      />
+
+      <van-button
         class="tl-export"
         round
         block
@@ -100,6 +124,12 @@ const isSample = ref(false)
 const layerCount = ref(0)
 
 const canvasEl = ref<HTMLCanvasElement | null>(null)
+const fileInput = ref<HTMLInputElement | null>(null)
+/**
+ * Bumped per file load so Vue rebuilds the canvas element. A new WebGL
+ * context is created on the fresh element; the old one is disposed first.
+ */
+const sceneKey = ref(0)
 // Opens on the finished print, not on layer 1. Showing a single layer on a
 // dark stage reads as an empty black frame — the whole point of the page is
 // to see the model. Playback rewinds to 0 on its own (see togglePlay).
@@ -159,10 +189,16 @@ const cameraLoop = (now?: number): void => {
   if (moved || t - lastFrameAt >= IDLE_RENDER_MS) {
     // A canvas that had not been laid out when the scene was built keeps a
     // zero-sized drawing buffer, and no resize event fires to correct it.
+    // A NaN aspect (same root cause) is just as fatal: the projection
+    // matrix collapses and nothing ever draws.
     const el = preview.renderer.domElement
-    if (el.width === 0 || el.height === 0) {
+    if (el.width === 0 || el.height === 0 || !Number.isFinite(cam.aspect)) {
       preview.resize()
       preview.renderer.setPixelRatio(pixelRatio)
+      if (!Number.isFinite(preview.camera.aspect)) {
+        rafCam = requestAnimationFrame(cameraLoop)
+        return
+      }
     }
     renderFrame()
     lastCamPos.copy(cam.position)
@@ -299,6 +335,20 @@ const buildPreview = async (text: string): Promise<void> => {
   })
   p.resize()
   p.renderer.setPixelRatio(pixelRatio)
+  // A canvas that resetScene() just swapped in can reach this point before
+  // the layout engine has run — init() then computes aspect as 0/0 = NaN,
+  // and a NaN projection matrix draws nothing at all (not even the plate).
+  // Wait a frame, force the drawing buffer, recompute.
+  if (!Number.isFinite(p.camera.aspect) || p.camera.aspect <= 0) {
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    const w2 = canvas.clientWidth || canvas.parentElement?.clientWidth || 360
+    const h2 = stageHeight(w2)
+    canvas.width = Math.round(w2 * pixelRatio)
+    canvas.height = Math.round(h2 * pixelRatio)
+    canvas.style.height = `${h2}px`
+    p.resize()
+    p.renderer.setPixelRatio(pixelRatio)
+  }
   // The library ships an unconditional 60 fps render loop. On a phone that
   // keeps the main thread and GPU busy even when the scene is static, which
   // makes the whole page feel laggy — so it is stopped here; cameraLoop
@@ -420,6 +470,8 @@ const buildPreview = async (text: string): Promise<void> => {
   canvas.addEventListener('webglcontextlost', onContextLost)
   canvas.addEventListener('webglcontextrestored', onContextRestored)
   preview = p
+  // Debug handle for CDP inspection of the scene state.
+  ;(window as any).__tl = { p, layerGroups, printable }
   layerCount.value = printable
   // Seed the camera snapshot, then drive input/rendering on demand.
   lastCamPos.copy(p.camera.position)
@@ -604,6 +656,18 @@ const loadGcodeFromPrinter = async (path: string, name: string): Promise<string>
   }
 }
 
+/** Runs the whole pipeline for any gcode text — printer, sample or phone. */
+const runWithGcode = async (text: string) => {
+  loadingText.value = t('tl_gen_parsing')
+  await nextTick()
+  await new Promise(resolve => setTimeout(resolve, 50))
+  await buildPreview(text)
+  phase.value = 'ready'
+  await nextTick()
+  // Finished print — one layer would look like an empty black frame.
+  renderAt(1)
+}
+
 const start = async () => {
   phase.value = 'loading'
   try {
@@ -621,15 +685,59 @@ const start = async () => {
       loadingText.value = t('tl_gen_downloading')
       text = await loadGcodeFromPrinter(path, fileName.value)
     }
-    loadingText.value = t('tl_gen_parsing')
-    // Let the loading overlay paint before the first parse slice blocks.
+    await runWithGcode(text)
+  } catch (err: any) {
+    phase.value = 'error'
+    errorText.value = err?.message ?? String(err)
+  }
+}
+
+/**
+ * Frees the previous scene. The canvas element itself is rebuilt through
+ * its :key (see the template) — the next buildPreview() call runs after a
+ * nextTick, when the ref points at the fresh, attached element.
+ */
+const resetScene = () => {
+  if (raf) cancelAnimationFrame(raf)
+  if (rafCam) cancelAnimationFrame(rafCam)
+  raf = 0
+  rafCam = 0
+  playing.value = false
+  preview?.dispose()
+  preview = null
+  layerGroups = []
+  layerCount.value = 0
+  progressPct.value = 100
+  sceneKey.value++
+}
+
+const openPicker = () => fileInput.value?.click()
+
+/** Reads a gcode/3mf picked from the phone and renders it. */
+const onFilePicked = async (e: Event) => {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  resetScene()
+  phase.value = 'loading'
+  isSample.value = false
+  fileName.value = file.name
+  try {
+    loadingText.value = t('tl_gen_downloading')
     await nextTick()
     await new Promise(resolve => setTimeout(resolve, 50))
-    await buildPreview(text)
-    phase.value = 'ready'
-    await nextTick()
-    // Finished print — one layer would look like an empty black frame.
-    renderAt(1)
+    const data = new Uint8Array(await file.arrayBuffer())
+    let text: string
+    if (/\.3mf$/i.test(file.name)) {
+      const unzipped = unzipSync(data)
+      const key = Object.keys(unzipped).find(k => /^Metadata\/plate_\d+\.gcode$/.test(k))
+      if (!key) throw new Error('no gcode inside 3mf')
+      text = new TextDecoder().decode(unzipped[key])
+    } else {
+      text = new TextDecoder().decode(data)
+    }
+    await runWithGcode(text)
   } catch (err: any) {
     phase.value = 'error'
     errorText.value = err?.message ?? String(err)
@@ -726,5 +834,13 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.tl-pick {
+  margin-top: -4px;
+}
+
+.tl-file-input {
+  display: none;
 }
 </style>
