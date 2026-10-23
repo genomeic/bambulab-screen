@@ -11,6 +11,9 @@
         <div v-if="phase === 'loading'" class="tl-overlay">
           <van-loading size="24" />
           <div class="tl-overlay-text">{{ loadingText }}</div>
+          <!-- Slicing a detailed model can take minutes; without a way out
+               the only exit is an ANR. -->
+          <div v-if="canCancel" class="tl-cancel" @click="onCancel">{{ t('cancel') }}</div>
         </div>
         <div v-else-if="phase === 'error'" class="tl-overlay">
           <van-icon name="warning-o" size="28" />
@@ -108,7 +111,7 @@ import { FTPSClient } from '@bambulab-p1screen/printer-api'
 import { createFtpUrl } from '../../printer'
 import { getCurrentDevice } from '../../utils/device'
 import { generateSampleGcode } from '../../utils/gcodeTimelapse'
-import { sliceStl } from '../../utils/stlSlicer'
+import { sliceStl, cancelStlSlice } from '../../utils/stlSlicer'
 import BasePage from '../../components/BasePage.vue'
 import { usePrinterStore } from '../../stores/printer'
 
@@ -123,6 +126,8 @@ const DURATIONS = [8, 15, 30]
 type Phase = 'loading' | 'ready' | 'error' | 'idle'
 const phase = ref<Phase>('loading')
 const loadingText = ref('')
+/** True only while a slice is in flight — the one job worth cancelling. */
+const canCancel = ref(false)
 const errorText = ref('')
 const fileName = ref('')
 const isSample = ref(false)
@@ -268,9 +273,15 @@ const fitCamera = (
 }
 
 /** Lines fed to the parser per UI slice — keeps the thread responsive. */
-const PARSE_CHUNK_LINES = 20000
-/** Layers built per UI slice while the scene is assembled. */
-const BUILD_CHUNK_LAYERS = 24
+const PARSE_CHUNK_LINES = 8000
+/**
+ * Layers built per UI slice while the scene is assembled. Kept small: one
+ * layer is a renderLayer + batchGeometries pass, and on a detailed model
+ * that is tens of milliseconds, so a coarse chunk reads as a freeze.
+ */
+const BUILD_CHUNK_LAYERS = 8
+/** Layer groups shaded per UI slice in the depth pass. */
+const SHADE_CHUNK_LAYERS = 32
 
 /** Capped device pixel ratio — a dpr-3 phone would otherwise render 2.25× the pixels. */
 let pixelRatio = 1
@@ -450,6 +461,7 @@ const buildPreview = async (text: string): Promise<void> => {
   for (let i = 0; i < layerGroups.length; i++) {
     const shade = Math.max(0.6, 1 - (top - i) * 0.006)
     if (shade >= 1) continue
+    if (i % SHADE_CHUNK_LAYERS === 0) await yieldToUI()
     layerGroups[i].traverse(obj => {
       const mat = (obj as THREE.Mesh).material as { color?: THREE.Color } | undefined
       if (!mat?.color || shaded.has(mat.color)) return
@@ -668,10 +680,15 @@ const runWithGcode = async (text: string) => {
   await nextTick()
   await new Promise(resolve => setTimeout(resolve, 50))
   await buildPreview(text)
-  phase.value = 'ready'
-  await nextTick()
-  // Finished print — one layer would look like an empty black frame.
+  // The first draw uploads every layer's buffers to the GPU, which on a
+  // detailed model is seconds of blocking work. The overlay stays up until
+  // that frame is on screen: a spinner that cannot move is still better
+  // than a finished-looking canvas that ignores every touch.
+  loadingText.value = `${t('tl_gen_rendering')} 100%`
+  await yieldToUI()
   renderAt(1)
+  await yieldToUI()
+  phase.value = 'ready'
 }
 
 const start = async () => {
@@ -697,11 +714,21 @@ const start = async () => {
       loadingText.value = t('tl_gen_downloading')
       text = await loadGcodeFromPrinter(path, fileName.value)
     }
-    await runWithGcode(text)
-  } catch (err: any) {
-    phase.value = 'error'
-    errorText.value = err?.message ?? String(err)
-  }
+      await runWithGcode(text)
+    } catch (err: any) {
+      canCancel.value = false
+      cancelStlSlice()
+      phase.value = 'error'
+      errorText.value = err?.message ?? String(err)
+    }
+}
+
+/** Abandons a slice that is taking too long. */
+const onCancel = () => {
+  cancelStlSlice()
+  canCancel.value = false
+  phase.value = 'idle'
+  fileName.value = ''
 }
 
 /**
@@ -739,11 +766,17 @@ const onFilePicked = async (e: Event) => {
       const data = new Uint8Array(await file.arrayBuffer())
       let text: string
       if (/\.stl$/i.test(file.name)) {
-        // An STL has no toolpaths of its own — slice it first.
+        // An STL has no toolpaths of its own — slice it first. Slicing runs
+        // in a worker because a detailed model needs minutes of CPU; this
+        // reports its progress instead of freezing the page.
         loadingText.value = t('tl_gen_slicing')
+        canCancel.value = true
         await nextTick()
         await new Promise(resolve => setTimeout(resolve, 50))
-        text = await sliceStl(data)
+        text = await sliceStl(data, pct => {
+          loadingText.value = `${t('tl_gen_slicing')} ${pct}%`
+        })
+        canCancel.value = false
       } else if (/\.3mf$/i.test(file.name)) {
         const unzipped = unzipSync(data)
         const key = Object.keys(unzipped).find(k => /^Metadata\/plate_\d+\.gcode$/.test(k))
@@ -766,6 +799,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onWindowResize)
+  cancelStlSlice()
   canvasEl.value?.removeEventListener('webglcontextlost', onContextLost)
   canvasEl.value?.removeEventListener('webglcontextrestored', onContextRestored)
   clearTimeout(resizeTimer)
@@ -811,6 +845,15 @@ onBeforeUnmount(() => {
 
 .tl-overlay-text {
   font-size: 13px;
+}
+
+.tl-cancel {
+  margin-top: 10px;
+  padding: 5px 18px;
+  font-size: 13px;
+  color: var(--van-gray-5, #c8c9cc);
+  border: 1px solid var(--van-gray-5, #c8c9cc);
+  border-radius: 14px;
 }
 
 .tl-meta {
