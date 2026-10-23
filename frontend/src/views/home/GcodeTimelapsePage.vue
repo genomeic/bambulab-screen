@@ -11,6 +11,7 @@
         <div v-if="phase === 'loading'" class="tl-overlay">
           <van-loading size="24" />
           <div class="tl-overlay-text">{{ loadingText }}</div>
+          <div v-if="sliceHint" class="tl-hint">{{ sliceHint }}</div>
           <!-- Slicing a detailed model can take minutes; without a way out
                the only exit is an ANR. -->
           <div v-if="canCancel" class="tl-cancel" @click="onCancel">{{ t('cancel') }}</div>
@@ -28,6 +29,7 @@
       <div class="tl-meta">
         <span class="tl-name">{{ fileName }}</span>
         <span v-if="layerCount > 0" class="tl-layers">{{ t('tl_gen_layers', { count: layerCount }) }}</span>
+        <span v-if="triCount > 0" class="tl-layers">{{ t('tl_gen_tris', { count: triCount }) }}</span>
         <van-tag v-if="isSample" size="medium" type="warning">{{ t('tl_gen_sample') }}</van-tag>
       </div>
 
@@ -128,6 +130,10 @@ const phase = ref<Phase>('loading')
 const loadingText = ref('')
 /** True only while a slice is in flight — the one job worth cancelling. */
 const canCancel = ref(false)
+/** Warning shown next to the progress once the model's cost is known. */
+const sliceHint = ref('')
+/** Triangles in the model last sliced, 0 for gcode/3mf — helps judge files. */
+const triCount = ref(0)
 const errorText = ref('')
 const fileName = ref('')
 const isSample = ref(false)
@@ -717,6 +723,7 @@ const start = async () => {
       await runWithGcode(text)
     } catch (err: any) {
       canCancel.value = false
+      sliceHint.value = ''
       cancelStlSlice()
       phase.value = 'error'
       errorText.value = err?.message ?? String(err)
@@ -727,8 +734,16 @@ const start = async () => {
 const onCancel = () => {
   cancelStlSlice()
   canCancel.value = false
+  sliceHint.value = ''
   phase.value = 'idle'
   fileName.value = ''
+}
+
+/** Complexity score ~ triangles x layers; thresholds tuned for a phone. */
+const sliceHintFor = (score: number): string => {
+  if (score > 8000000) return t('tl_gen_slice_slowest')
+  if (score > 3000000) return t('tl_gen_slice_slow')
+  return ''
 }
 
 /**
@@ -762,6 +777,8 @@ const onFilePicked = async (e: Event) => {
   phase.value = 'loading'
   isSample.value = false
   fileName.value = file.name
+  triCount.value = 0
+  sliceHint.value = ''
     try {
       const data = new Uint8Array(await file.arrayBuffer())
       let text: string
@@ -773,10 +790,19 @@ const onFilePicked = async (e: Event) => {
         canCancel.value = true
         await nextTick()
         await new Promise(resolve => setTimeout(resolve, 50))
-        text = await sliceStl(data, pct => {
-          loadingText.value = `${t('tl_gen_slicing')} ${pct}%`
+        const res = await sliceStl(data, st => {
+          // polyslice's score is triangles x layers; a phone core is 2-5x
+          // slower than the desktop it was calibrated on, so say so up front
+          // rather than leaving the user staring at an unexplained wait.
+          if (st.score != null) sliceHint.value = sliceHintFor(st.score)
+          if (st.percent != null) {
+            loadingText.value = `${t('tl_gen_slicing')} ${st.percent}%`
+          }
         })
+        triCount.value = res.triangleCount
         canCancel.value = false
+        sliceHint.value = ''
+        text = res.gcode
       } else if (/\.3mf$/i.test(file.name)) {
         const unzipped = unzipSync(data)
         const key = Object.keys(unzipped).find(k => /^Metadata\/plate_\d+\.gcode$/.test(k))
@@ -854,6 +880,15 @@ onBeforeUnmount(() => {
   color: var(--van-gray-5, #c8c9cc);
   border: 1px solid var(--van-gray-5, #c8c9cc);
   border-radius: 14px;
+}
+
+.tl-hint {
+  margin-top: 6px;
+  max-width: 80%;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--van-gray-5, #c8c9cc);
 }
 
 .tl-meta {

@@ -29,11 +29,16 @@ export const cancelStlSlice = (): void => {
   worker = null
 }
 
+const triangleCountOf = (geometry: THREE.BufferGeometry): number =>
+  geometry.index
+    ? Math.floor(geometry.index.count / 3)
+    : Math.floor((geometry.attributes.position?.count ?? 0) / 3)
+
 /** Same job as the worker, on the main thread — only a fallback. */
 const sliceInline = async (
   data: Uint8Array,
   onProgress?: (percent: number) => void,
-): Promise<string> => {
+): Promise<StlSliceResult> => {
   const buffer = data.buffer.slice(
     data.byteOffset,
     data.byteOffset + data.byteLength,
@@ -66,22 +71,37 @@ const sliceInline = async (
       onProgress?.(percent)
     },
   })
-  return slicer.slice(new THREE.Mesh(geometry))
+  return {
+    gcode: slicer.slice(new THREE.Mesh(geometry)),
+    triangleCount: triangleCountOf(geometry),
+    heightMm,
+    layerHeight: layerHeightFor(heightMm),
+  }
 }
 
-/**
- * Reads an STL (binary or ASCII) and slices it into G-code.
- *
- * The mesh is centred on the bed and dropped onto the plate first: STL
- * coordinates are arbitrary and often sit around the origin, which would
- * otherwise leave the model half below z=0 or off in a corner.
- *
- * @param onProgress receives 0-100 while polyslice works through the layers.
- */
+/** Slice progress / model facts reported before and during slicing. */
+export interface StlSliceStatus {
+  /** 0-100 while polyslice works through the layers. */
+  percent?: number
+  /** polyslice complexity score (triangles x layers) for the model. */
+  score?: number
+}
+
+/** What slicing an STL produced, besides the G-code itself. */
+export interface StlSliceResult {
+  gcode: string
+  triangleCount: number
+  heightMm: number
+  layerHeight: number
+}
+
 export const sliceStl = async (
   data: Uint8Array,
-  onProgress?: (percent: number) => void,
-): Promise<string> => {
+  onStatus?: (status: StlSliceStatus) => void,
+): Promise<StlSliceResult> => {
+  const onProgress = onStatus
+    ? (percent: number) => onStatus({ percent })
+    : undefined
   if (typeof Worker === 'undefined') return sliceInline(data, onProgress)
 
   // Copy into a standalone buffer before handing it over: the view may sit
@@ -95,16 +115,25 @@ export const sliceStl = async (
   const w = new Worker(new URL('./stlSlicer.worker.ts', import.meta.url))
   worker = w
 
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<StlSliceResult>((resolve, reject) => {
     w.onmessage = (e: MessageEvent) => {
       const msg = e.data ?? {}
       if (msg.type === 'progress') {
         onProgress?.(msg.percent)
         return
       }
+      if (msg.type === 'info') {
+        onStatus?.({ score: msg.score })
+        return
+      }
       if (msg.type === 'done') {
         cancelStlSlice()
-        resolve(msg.gcode as string)
+        resolve({
+          gcode: msg.gcode as string,
+          triangleCount: (msg.triangleCount as number) ?? 0,
+          heightMm: (msg.heightMm as number) ?? 0,
+          layerHeight: (msg.layerHeight as number) ?? 0,
+        })
         return
       }
       cancelStlSlice()

@@ -13,8 +13,8 @@ android {
     // Bump on every shipped build — the filename and the in-app "current
     // version" row both read this, so it is the only way for the user to
     // tell a new package from the previous one.
-    versionCode 5
-    versionName (System.getenv("APP_VERSION_NAME") ?: "0.3.2")
+    versionCode 6
+    versionName (System.getenv("APP_VERSION_NAME") ?: "0.3.3")
   }
 
   signingConfigs {

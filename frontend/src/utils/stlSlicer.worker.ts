@@ -40,6 +40,13 @@ ctx.onmessage = async (e: MessageEvent) => {
       ? Math.floor(geometry.index.count / 3)
       : Math.floor((geometry.attributes.position?.count ?? 0) / 3)
     const layerHeight = layerHeightFor(heightMm)
+    // polyslice's own complexity metric (triangles x layers). Its thresholds
+    // are calibrated for a desktop core; a phone core is 2-5x slower and
+    // throttles under a sustained load, so warn earlier than it does.
+    ctx.postMessage({
+      type: 'info',
+      score: triangleCount * Math.max(1, Math.ceil(heightMm / layerHeight)),
+    })
 
     const { Polyslice } = polyslice
     let lastPercent = -1
