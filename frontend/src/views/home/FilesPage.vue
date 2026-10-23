@@ -1,5 +1,14 @@
 <template>
   <BasePage :title="t('file_list')">
+    <van-cell-group inset class="tl-entry">
+      <van-cell
+        :title="t('tl_gen_title')"
+        :label="localSupported ? t('tl_gen_entry_local') : t('tl_gen_entry_cloud')"
+        is-link
+        center
+        @click="openTimelapse"
+      />
+    </van-cell-group>
     <van-tabs v-model:active="activeTab" class="files-tabs">
       <van-tab :title="t('files_history')">
         <div class="history-filter">
@@ -343,9 +352,16 @@ const onTaskClick = (task: CloudTask) => {
     .catch(() => {})
 }
 
+/**
+ * Printer files are read over FTP, which only needs the printer's LAN IP and
+ * access code. Both are stored on the device even when the live control
+ * connection runs through the cloud, so a cloud-connected printer sitting on
+ * the same Wi-Fi is still readable — requiring connect === 'local' here hid
+ * the entire files feature (and the timelapse entry) from cloud fleets.
+ */
 const localSupported = computed(() => {
   const dev = getCurrentDevice()
-  return !!dev && dev.connect === 'local' && !!dev.ip && !!dev.code
+  return !!dev && !!dev.ip && !!dev.code
 })
 
 const loadLocalFiles = async () => {
@@ -474,6 +490,24 @@ const onLocalRefresh = (value: boolean) => {
   loadLocalFiles()
 }
 
+/**
+ * Entry point for the virtual timelapse. It used to exist only inside the
+ * "local files" tab, which is hidden unless the device is connected over
+ * LAN — so on a cloud-connected fleet the feature was unreachable and
+ * looked like it had never been shipped.
+ */
+const openTimelapse = () => {
+  if (localSupported.value) {
+    // Real gcode comes from the printer over FTP; let the user pick a file.
+    activeTab.value = 1
+    showToast(t('tl_gen_pick_hint'))
+    return
+  }
+  // No LAN: no way to read gcode, so show the built-in sample instead of
+  // dead-ending on an empty list.
+  router.push({ name: ROUTE_NAME.GCODE_TIMELAPSE, query: { test: '1' } })
+}
+
 const onLocalFileClick = (file: { name: string; path: string }) => {
   if (!/\.(3mf|gcode)$/i.test(file.name)) return
   if (isCloudPrintBlocked(modules.value)) {
@@ -555,6 +589,11 @@ const statusType = (status: number): 'success' | 'primary' | 'danger' => {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.tl-entry {
+  flex-shrink: 0;
+  padding-top: 8px;
 }
 
 .files-tabs :deep(.van-tabs__content) {
