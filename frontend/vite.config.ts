@@ -2,11 +2,26 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import legacy from '@vitejs/plugin-legacy'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import { execSync } from 'node:child_process'
 import Components from 'unplugin-vue-components/vite'
 import Icons from 'unplugin-icons/vite'
 import IconsResolver from 'unplugin-icons/resolver'
 import postCssPresetEnv from 'postcss-preset-env'
+
+const require = createRequire(import.meta.url)
+
+/**
+ * polyslice's default (Node) ESM build leaves `@jgphilpott/polyconvert`
+ * external and `require()`s it, which throws "Dynamic require of ... is not
+ * supported" in the browser — and because it sat in the entry chunk that
+ * killed the whole app. Its browser build inlines every dependency, so the
+ * bare specifier is pinned to that file.
+ */
+const polysliceBrowserEsm = path.join(
+  path.dirname(require.resolve('@jgphilpott/polyslice/package.json')),
+  'dist/index.browser.esm.js',
+)
 
 const getGitText = (command: string) => {
   try {
@@ -74,7 +89,12 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, 'src')
+      '@': path.resolve(__dirname, 'src'),
+      '@jgphilpott/polyslice': polysliceBrowserEsm,
     }
-  }
+  },
+  optimizeDeps: {
+    // keep the 1 MB slicer out of the pre-bundle; it is imported lazily
+    exclude: ['@jgphilpott/polyslice'],
+  },
 })

@@ -4,6 +4,7 @@
   "type": "module",
   "dependencies": {
     "@bambulab-p1screen/printer-api": "*",
+    "@jgphilpott/polyslice": "^26.7.0",
     "colord": "^2.9.3",
     "fflate": "^0.8.2",
     "gcode-preview": "^2.18.0",

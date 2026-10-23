@@ -76,7 +76,7 @@
       <input
         ref="fileInput"
         type="file"
-        accept=".gcode,.3mf"
+        accept=".gcode,.3mf,.stl"
         class="tl-file-input"
         @change="onFilePicked"
       />
@@ -108,6 +108,7 @@ import { FTPSClient } from '@bambulab-p1screen/printer-api'
 import { createFtpUrl } from '../../printer'
 import { getCurrentDevice } from '../../utils/device'
 import { generateSampleGcode } from '../../utils/gcodeTimelapse'
+import { sliceStl } from '../../utils/stlSlicer'
 import BasePage from '../../components/BasePage.vue'
 import { usePrinterStore } from '../../stores/printer'
 
@@ -734,22 +735,25 @@ const onFilePicked = async (e: Event) => {
   phase.value = 'loading'
   isSample.value = false
   fileName.value = file.name
-  try {
-    loadingText.value = t('tl_gen_downloading')
-    await nextTick()
-    await new Promise(resolve => setTimeout(resolve, 50))
-    const data = new Uint8Array(await file.arrayBuffer())
-    let text: string
-    if (/\.3mf$/i.test(file.name)) {
-      const unzipped = unzipSync(data)
-      const key = Object.keys(unzipped).find(k => /^Metadata\/plate_\d+\.gcode$/.test(k))
-      if (!key) throw new Error('no gcode inside 3mf')
-      text = new TextDecoder().decode(unzipped[key])
-    } else {
-      text = new TextDecoder().decode(data)
-    }
-    await runWithGcode(text)
-  } catch (err: any) {
+    try {
+      const data = new Uint8Array(await file.arrayBuffer())
+      let text: string
+      if (/\.stl$/i.test(file.name)) {
+        // An STL has no toolpaths of its own — slice it first.
+        loadingText.value = t('tl_gen_slicing')
+        await nextTick()
+        await new Promise(resolve => setTimeout(resolve, 50))
+        text = await sliceStl(data)
+      } else if (/\.3mf$/i.test(file.name)) {
+        const unzipped = unzipSync(data)
+        const key = Object.keys(unzipped).find(k => /^Metadata\/plate_\d+\.gcode$/.test(k))
+        if (!key) throw new Error('no gcode inside 3mf')
+        text = new TextDecoder().decode(unzipped[key])
+      } else {
+        text = new TextDecoder().decode(data)
+      }
+      await runWithGcode(text)
+    } catch (err: any) {
     phase.value = 'error'
     errorText.value = err?.message ?? String(err)
   }
