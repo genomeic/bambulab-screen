@@ -497,15 +497,11 @@ const onLocalRefresh = (value: boolean) => {
  * looked like it had never been shipped.
  */
 const openTimelapse = () => {
-  if (localSupported.value) {
-    // Real gcode comes from the printer over FTP; let the user pick a file.
-    activeTab.value = 1
-    showToast(t('tl_gen_pick_hint'))
-    return
-  }
-  // No LAN: no way to read gcode, so show the built-in sample instead of
-  // dead-ending on an empty list.
-  router.push({ name: ROUTE_NAME.GCODE_TIMELAPSE, query: { test: '1' } })
+  // Straight to the page — it offers both sources (a file on the phone, or
+  // one read from the printer). Pointing at the local-files tab instead hid
+  // the phone-pick button behind a list that is empty whenever the printer
+  // cannot be reached.
+  router.push({ name: ROUTE_NAME.GCODE_TIMELAPSE })
 }
 
 const onLocalFileClick = (file: { name: string; path: string }) => {

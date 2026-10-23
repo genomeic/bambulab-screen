@@ -16,6 +16,10 @@
           <van-icon name="warning-o" size="28" />
           <div class="tl-overlay-text">{{ errorText }}</div>
         </div>
+        <div v-else-if="phase === 'idle'" class="tl-overlay">
+          <van-icon name="photo-o" size="28" />
+          <div class="tl-overlay-text">{{ t('tl_gen_pick_prompt') }}</div>
+        </div>
       </div>
 
       <div class="tl-meta">
@@ -114,7 +118,8 @@ const route = useRoute()
 
 const DURATIONS = [8, 15, 30]
 
-type Phase = 'loading' | 'ready' | 'error'
+/** Nothing loaded yet — waiting for the user to pick a file. */
+type Phase = 'loading' | 'ready' | 'error' | 'idle'
 const phase = ref<Phase>('loading')
 const loadingText = ref('')
 const errorText = ref('')
@@ -669,18 +674,24 @@ const runWithGcode = async (text: string) => {
 }
 
 const start = async () => {
+  const test = route.query.test === '1'
+  const path = String(route.query.path ?? '')
+  // Opened from the files page without a file: show the picker prompt
+  // instead of failing on a missing path.
+  if (!test && !path) {
+    phase.value = 'idle'
+    return
+  }
   phase.value = 'loading'
   try {
     let text: string
-    if (route.query.test === '1') {
+    if (test) {
       isSample.value = true
       fileName.value = 'sample.gcode'
       loadingText.value = t('tl_gen_generating')
       text = generateSampleGcode()
     } else {
       const name = String(route.query.name ?? '')
-      const path = String(route.query.path ?? '')
-      if (!path) throw new Error('missing file')
       fileName.value = name || path.split('/').pop() || 'model'
       loadingText.value = t('tl_gen_downloading')
       text = await loadGcodeFromPrinter(path, fileName.value)

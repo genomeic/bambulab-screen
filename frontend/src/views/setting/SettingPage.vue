@@ -107,7 +107,20 @@ import { usePrinterStore } from '../../stores/printer'
 import { isAutoDeductEnabled, setAutoDeductEnabled } from '../../utils/spoolStore'
 
 const { t, locale } = useI18n()
-const currentVersion = import.meta.env.APP_VERSION
+/**
+ * The APK versionName is the thing that actually changes between shipped
+ * packages, so it leads; the git tag/hash build suffix follows so a local
+ * build can still be identified.
+ */
+const currentVersion = computed(() => {
+  const bridge = (window as any).P1ScreenBridge
+  const apk = typeof bridge?.getAppVersion === 'function'
+    ? String(bridge.getAppVersion() ?? '')
+    : ''
+  const build = String(import.meta.env.APP_VERSION ?? '')
+  if (apk && build && apk !== build) return `${apk} · ${build}`
+  return apk || build
+})
 const LATEST_RELEASE_URL = 'https://api.github.com/repos/0x5e/bambulab-p1screen/releases/latest'
 
 const { device, modules } = usePrinterStore()
@@ -278,7 +291,7 @@ const handleCheckForUpdates = async () => {
     }
 
     const release = await response.json() as GitHubRelease
-    const currentTag = getVersionTag(currentVersion)
+    const currentTag = getVersionTag(currentVersion.value)
     const latestTag = release.tag_name ?? ''
     const hasUpdate = /^v\d+\.\d+\.\d+$/i.test(currentTag)
       && /^v\d+\.\d+\.\d+$/i.test(latestTag)

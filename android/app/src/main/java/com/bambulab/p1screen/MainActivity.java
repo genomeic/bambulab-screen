@@ -323,6 +323,16 @@ public final class MainActivity extends Activity {
       return true;
     }
 
+    /** APK versionName — shown in settings so a fresh install is recognisable. */
+    @JavascriptInterface
+    public String getAppVersion() {
+      try {
+        return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+      } catch (Exception e) {
+        return "";
+      }
+    }
+
     @JavascriptInterface
     public boolean getLandscapeHideStatusBar() {
       return prefs.getBoolean(PREF_LANDSCAPE_HIDE_STATUS_BAR, false);
